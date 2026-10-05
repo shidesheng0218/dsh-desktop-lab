@@ -110,7 +110,12 @@ dsh-devkit source dsh-session-query dsh-session-projection-cache dsh-client-ui-t
 缺 `dsh.bundle.patch`、patch 顶层不是数组、补丁行缺 `name`、YAML 用制表符缩进、
 `exports["./client"]` 缺失、client bundle 没调 `__ModuleLoader__`、工厂 id 与包名不一致、
 client bundle `require` 了 `@deepseek-ai/dsh-client-*`（官方明令禁止）、JS 语法错误、
-locale 键不一致、图标越界或缺失、声明了运行时依赖。
+locale 键不一致、图标越界或缺失、声明了运行时依赖、
+**client bundle 有中文文案却没注册 locale**（启发式，见下）。
+
+最后一条是本项目自己踩过的坑：界面文案一度硬编码中文，英文界面下会整片显示中文。
+现在这条规则会提前报警 —— 把 `locale.register` 从 client bundle 里删掉，
+`check` 立刻报出「51 处含中文的字符串字面量，但没有调用 locale.register()」。
 
 ---
 
@@ -121,8 +126,8 @@ packages/usage-insights/
 ├── index.js            Host 半边：注入官方服务取数 + 注册 /api 路由
 ├── lib/core.js         纯逻辑：规范化 + 折叠成报告（无 DSH 依赖，可单测）
 ├── lib/pricing.js      价目表与成本估算
-├── client.js           Client 半边：左侧栏图标 + 面板（React，无构建步骤）
-└── test/               61 个用例
+├── client.js           Client 半边：左侧栏图标 + 面板（React，无构建步骤，zh/en 双语）
+└── test/               55 个用例
 ```
 
 取数链路（每一处 API 都从官方**已构建源码**核对，不是照 README 猜的）：
@@ -150,12 +155,19 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 
 **已验证：**
 
-- `packages/devkit/test` 13 个用例，含 12 个刻意构造的坏包，全部被正确报出
-- `packages/usage-insights/test` 48 个用例：聚合核心 25 个、Host 集成 15 个、Client 契约 8 个
-- **变异测试**：注入 6 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
-  字面颜色、成本退化 0 元、金额措辞丢失），全部被测试抓住——证明测试能失败，不是摆设
+- `packages/devkit/test` 16 个用例，含 14 个刻意构造的坏包/坏 bundle，全部被正确报出
+- `packages/usage-insights/test` 55 个用例：聚合核心 25 个、Host 集成 16 个、Client 契约 14 个
+- **变异测试**：先后注入 10 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
+  字面颜色、成本退化 0 元、金额措辞丢失、时间窗只筛不标注、en 词典缺键、
+  en 值写成中文、绕开 `t()` 硬编码、词典注册脱离 `ctx.effect`），
+  全部被测试抓住 —— 证明测试能失败，不是摆设。
+  其中前两轮各有漏网（断言被页脚文案意外满足、只查了错误态），补强后才收敛。
 - **真实数据交叉验证**：Host 链路跑在本机真实投影缓存上，与独立重算的结果逐位一致
 - Client 半边在模拟浏览器环境里真正执行过，加载态/成功态/失败态都渲染出内容
+- **locale 接线完整性**：英文渲染下断言「结果里不得出现任何中日韩字符」，
+  另加两种语言键集一致、缺 locale 服务时不显示原始键名三条互相独立
+- **挂载链路**：从官方 `ui-sidebar` / `ui-layout` / `ui-slots` 已构建源码逐环核对
+  （面板列表来源、`selectPanel` 的 `hasMainPanel` 校验、`resolveSlotLabel` 支持函数）
 - `dsh-devkit check` 对本插件零错误零警告
 
 **未验证（能力所限，如实说明）：**
@@ -177,6 +189,9 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 - **时间窗按「会话创建时间」筛选**，不是最后活动时间。官方投影缓存里没有可靠的最后活动字段。
 - **金额按单条价目表折算**，无法按模型分别计价——投影缓存的 `tokenUsage` 只有四个 token 桶，不含路由/模型。
 - **数据与最后一次 checkpoint 一样旧**（官方 write-behind 是 200 事件 / 5 秒一次），但永不会错。
+- **界面文案只有 zh / en 两种**。官方的 locale 回退链必须终止于 `en`，所以新增第三种语言要另外提供
+  一份词典并声明回退链；当前词典写在 `client.js` 里（无构建步骤，不能 import JSON），
+  `locale/*.json` 另有用处 —— 它们是宿主机读取的**插件卡片展示元数据**，与界面文案是两回事。
 - 重新安装同一个包需要重启 DSH 才会加载新的 JS 模块代（官方行为）。
 - Node 版本需 ≥ 22.15：`zstd` 与新的 `node --test` glob 行为都依赖它。
 
@@ -189,7 +204,7 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 ## 开发
 
 ```bash
-npm test        # 61 个用例
+npm test        # 68 个用例
 npm run check   # 插件包静态校验
 npm run docs    # 重建官方文档缓存
 npm run real    # 真实数据报告

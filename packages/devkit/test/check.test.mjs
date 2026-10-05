@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { checkPackage, lintPatch } from '../lib/check.mjs';
+import { checkPackage, countCjkStringLiterals, lintPatch } from '../lib/check.mjs';
 import { scaffold } from '../lib/scaffold.mjs';
 
 function makeTempDir() {
@@ -125,4 +125,59 @@ test('声明了 client 却没有 exports["./client"] 会被抓到', () => {
 test('缺失 package.json 直接报错而不是抛异常', () => {
   const { findings } = checkPackage(makeTempDir());
   assert.deepEqual(codes(findings), ['manifest.missing']);
+});
+
+/* ------------------------------------------ 界面文案本地化（启发式规则） */
+
+test('client bundle 有中文文案却不注册 locale 时给出警告', () => {
+  const dir = makeCleanPackage();
+  const clientPath = path.join(dir, 'client.js');
+  // 既有中文文案、又从不调用 locale.register —— 正是「界面文案写死」的形态
+  fs.writeFileSync(
+    clientPath,
+    [
+      "window.__ModuleLoader__.load({",
+      "  id: '@local/clean-panel',",
+      "  factory(require) {",
+      "    return { inject: ['slots'], apply(ctx) { ctx.slots.register({ name: 'main', key: 'x' }, () => '标题'); } };",
+      '  },',
+      '});',
+      '',
+    ].join('\n'),
+  );
+  const { findings } = checkPackage(dir);
+  assert.ok(codes(findings).includes('client.hardcoded-copy'), JSON.stringify(findings, null, 2));
+});
+
+test('调用过 locale.register 的 client bundle 不触发该警告', () => {
+  const dir = makeCleanPackage();
+  const clientPath = path.join(dir, 'client.js');
+  fs.writeFileSync(
+    clientPath,
+    [
+      "window.__ModuleLoader__.load({",
+      "  id: '@local/clean-panel',",
+      "  factory(require) {",
+      "    return { inject: ['slots'], apply(ctx) {",
+      "      ctx.effect(() => ctx.locale.register('ns', { zh: { a: '标题' }, en: { a: 'Title' } }));",
+      "      ctx.slots.register({ name: 'main', key: 'x' }, () => '标题');",
+      '    } };',
+      '  },',
+      '});',
+      '',
+    ].join('\n'),
+  );
+  const { findings } = checkPackage(dir);
+  assert.ok(!codes(findings).includes('client.hardcoded-copy'), JSON.stringify(findings, null, 2));
+});
+
+test('统计中文字面量时会跳过注释，避免把中文注释当成文案', () => {
+  const withComments = [
+    '// 这是一段中文注释，不应被计入',
+    '/* 另一段中文注释 */',
+    "const label = '保存';",
+    '',
+  ].join('\n');
+  assert.equal(countCjkStringLiterals(withComments), 1);
+  assert.equal(countCjkStringLiterals("const a = 'Save';"), 0);
 });

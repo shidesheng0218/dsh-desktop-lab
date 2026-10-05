@@ -281,8 +281,13 @@ export function aggregate(sessions, options = {}) {
     .slice(0, topN)
     .map((session) => ({
       id: session.id,
-      title: session.displayTitle,
+      // `title` 是原值（可能为 null），留给界面做本地化兜底；
+      // `displayTitle` 带中文兜底串，供没有 locale 概念的 CLI 直接使用。
+      // 两者都给出，是为了不让 Host 侧的显示文案污染到多语言界面。
+      title: session.title,
+      displayTitle: session.displayTitle,
       workspaceLabel: session.workspaceLabel,
+      cwd: session.cwd,
       createdAt: session.createdAt,
       tokens: session.tokens,
       cost: price === null ? null : estimateCost(session.tokens, price),

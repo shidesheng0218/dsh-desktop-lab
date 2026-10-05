@@ -199,7 +199,7 @@ function main() {
   lines.push('', 'Top 会话：');
   for (const session of report.topSessions) {
     lines.push(
-      `  ${formatTokens(session.tokens.total).padStart(8)}  ${session.workspaceLabel.padEnd(20)} ${session.title.slice(0, 40)}`,
+      `  ${formatTokens(session.tokens.total).padStart(8)}  ${session.workspaceLabel.padEnd(20)} ${session.displayTitle.slice(0, 40)}`,
     );
   }
 

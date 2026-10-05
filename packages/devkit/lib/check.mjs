@@ -254,6 +254,18 @@ export function checkPackage(dir) {
           `${relative} 触碰了 document.body；插件应当只在自己的 slot 内渲染`,
         );
       }
+      // 官方文档要求 "Route visible UI text through the Client locale service"。
+      // 这条规则是启发式的：一个既有 CJK 文案、又从不注册 locale 命名空间的
+      // 客户端 bundle，几乎可以肯定把界面文案写死了。误报只是警告，代价可接受。
+      const cjkLiterals = countCjkStringLiterals(text);
+      if (cjkLiterals > 0 && !/locale\s*\.\s*register\s*\(/.test(text)) {
+        push(
+          'warn',
+          'client.hardcoded-copy',
+          `${relative} 里有 ${cjkLiterals} 处含中文的字符串字面量，但没有调用 locale.register()。` +
+            '界面文案应走 ctx.locale（官方要求），否则英文界面下会显示中文',
+        );
+      }
     }
     const platform = clientSpec.platform;
     if (platform !== undefined && platform !== 'web') {
@@ -342,4 +354,26 @@ function flattenKeys(value, prefix = '') {
   return Object.entries(value).flatMap(([key, child]) =>
     flattenKeys(child, prefix === '' ? key : `${prefix}.${key}`),
   );
+}
+
+/** 中日韩统一表意文字 + 假名 + 谚文。 */
+const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]/;
+
+/**
+ * 统计含中日韩字符的字符串字面量数量（启发式）。
+ *
+ * 先尽量剥掉注释，避免把中文注释算成文案。完整解析 JS 需要真正的 parser，
+ * 这里只服务于一条警告级规则，所以容忍粗糙：宁可偶尔漏报，也不要为了
+ * 精准而引入一个会在正常代码上报错的解析器。
+ * @param {string} text 文件内容
+ */
+export function countCjkStringLiterals(text) {
+  const withoutComments = text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1');
+  let count = 0;
+  for (const match of withoutComments.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
+    if (CJK_PATTERN.test(match[0])) count += 1;
+  }
+  return count;
 }

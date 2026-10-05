@@ -1,15 +1,18 @@
 /**
  * Client 半边：跨会话用量与成本面板。
  *
- * 三条硬约束（都来自官方文档，违反会直接让整个 slot 空白）：
+ * 四条硬约束（前三条来自官方文档，违反会让整个 slot 空白或与宿主不一致）：
  *  1. 不 import 任何 Harness 客户端包。React 从浏览器模块表里取，其余自备。
  *  2. 只用主题令牌着色，不写字面颜色。令牌名取自官方 dsh-client-ui-theme
- *     的令牌表（403 个），不是猜的；每个都带兜底值，令牌被重命名时只是
- *     外观退化，不会渲染失败。
+ *     的令牌表（403 个），不是猜的；每个都带兜底值。
  *  3. 挂载点走官方 shipped 代码验证过的两段式：
- *       sidebar.panellist  左侧栏图标（侧栏自己调 selectPanel(id)，图标只画字形）
+ *       sidebar.panellist  左侧栏图标（侧栏自己调 selectPanel(id)）
  *       main               keyed 面板主体，key 必须等于 panellist 的 id
  *     —— 对照 dsh-client-ui-schedule 的 client.js。
+ *  4. **所有可见文案走 ctx.locale**，不硬编码。官方文档要求
+ *     "Route visible UI text through the Client locale service"。
+ *     词典同时注册 zh 与 en；缺 locale 服务时退回内置中文词典并按 {name} 插值，
+ *     保证任何情况下都不会把原始键名渲染到界面上。
  *
  * 数据全部来自 Host 半边注册的 `/api/usage-insights`，本半边不做任何聚合。
  */
@@ -21,11 +24,179 @@ window.__ModuleLoader__.load({
 
     const PANEL_ID = 'usage-insights';
     const DATA_PATH = '/api/usage-insights';
+    // 命名空间带上包名，避免与其它插件撞车。
+    const NS = '@local/dsh-usage-insights/panel';
+
+    /**
+     * 词典。两种语言必须键集完全一致——官方 locale 命名空间就是这么要求的
+     * （TS 部署里由编译器强制；这里是纯 JS，靠 devkit check 与单元测试兜底）。
+     */
+    const DICT = {
+      zh: {
+        panel: '会话用量与成本',
+        loading: '正在汇总会话数据…',
+        errorTitle: '取数失败',
+        retry: '重试',
+        malformed: 'Host 返回的数据格式不符合预期。',
+        refresh: '刷新',
+        refreshTitle: '重新汇总',
+        win24h: '24 小时',
+        win7d: '7 天',
+        win30d: '30 天',
+        winAll: '全部',
+        statTokens: 'Token 总量',
+        statCache: '缓存命中率',
+        statOutput: '输出 token',
+        statCost: '估算成本',
+        hintSessions: '{withUsage}/{total} 个会话有用量',
+        hintCacheRead: '缓存读取 {value}',
+        hintTurns: '轮次 {turns} / 步 {steps}',
+        hintCostEstimated: '按你配置的价目表估算，非账单',
+        hintCostUnconfigured: '官方不提供价格数据，需在插件 config 里填价目表',
+        costUnconfigured: '未配置',
+        sectionTokens: 'Token 构成',
+        segUncachedInput: '未缓存输入',
+        segCacheRead: '缓存读取',
+        segCacheWrite: '缓存写入',
+        segOutput: '输出',
+        metaLlm: '模型耗时',
+        metaTool: '工具耗时',
+        metaTotal: '合计',
+        metaLive: '进行中会话',
+        metaGeneratedAt: '汇总于 {time}',
+        sectionWorkspace: '按工作区',
+        sectionDaily: '按天（最近 14 天）',
+        sectionTop: 'Token 最多的会话',
+        colWorkspace: '工作区',
+        colSessions: '会话',
+        colTokens: 'Token',
+        colCacheHit: '命中率',
+        colCost: '成本',
+        colEstimatedCost: '估算成本',
+        colCreatedAt: '创建于',
+        colSession: '会话',
+        untitled: '（未命名会话）',
+        unknownWorkspace: '（未知工作区）',
+        footWindow:
+          '口径：时间窗按「会话创建时间」筛选，不是最后活动时间；官方投影缓存里没有可靠的最后活动字段。',
+        footSource:
+          '数据源：sessionQuery.listSessions() + sessionProjectionCache.cachedSnapshot()，为零 I/O 读取，数值与官方会话列表一致。',
+        footCostEstimated:
+          '金额：按你在插件 config 里配置的价目表估算。官方全部 287 个包中不存在货币价格数据，因此这不是账单。',
+        footCostUnconfigured:
+          '金额：未配置价目表，故不显示任何金额——官方不提供价格数据，此处不臆造数字。',
+        durationHours: '{value} 小时',
+        durationMinutes: '{value} 分钟',
+        durationSeconds: '{value} 秒',
+        durationMs: '{value} 毫秒',
+        durationNone: '—',
+      },
+      en: {
+        panel: 'Session Usage & Cost',
+        loading: 'Aggregating session data…',
+        errorTitle: 'Failed to load',
+        retry: 'Retry',
+        malformed: 'The Host returned an unexpected payload shape.',
+        refresh: 'Refresh',
+        refreshTitle: 'Re-aggregate',
+        win24h: '24 hours',
+        win7d: '7 days',
+        win30d: '30 days',
+        winAll: 'All',
+        statTokens: 'Total tokens',
+        statCache: 'Cache hit rate',
+        statOutput: 'Output tokens',
+        statCost: 'Estimated cost',
+        hintSessions: '{withUsage}/{total} sessions with usage',
+        hintCacheRead: 'Cache reads {value}',
+        hintTurns: '{turns} turns / {steps} steps',
+        hintCostEstimated: 'Estimated from your price table; not a bill',
+        hintCostUnconfigured:
+          'No price data ships with the harness; set a price table in this plugin\u2019s config',
+        costUnconfigured: 'Not configured',
+        sectionTokens: 'Token composition',
+        segUncachedInput: 'Uncached input',
+        segCacheRead: 'Cache reads',
+        segCacheWrite: 'Cache writes',
+        segOutput: 'Output',
+        metaLlm: 'Model time',
+        metaTool: 'Tool time',
+        metaTotal: 'Total',
+        metaLive: 'Live sessions',
+        metaGeneratedAt: 'Aggregated at {time}',
+        sectionWorkspace: 'By workspace',
+        sectionDaily: 'By day (last 14)',
+        sectionTop: 'Top sessions by tokens',
+        colWorkspace: 'Workspace',
+        colSessions: 'Sessions',
+        colTokens: 'Tokens',
+        colCacheHit: 'Hit rate',
+        colCost: 'Cost',
+        colEstimatedCost: 'Est. cost',
+        colCreatedAt: 'Created',
+        colSession: 'Session',
+        untitled: '(untitled session)',
+        unknownWorkspace: '(unknown workspace)',
+        footWindow:
+          'Scope: the time window filters by session creation time, not last activity; the official projection cache carries no reliable last-activity field.',
+        footSource:
+          'Source: sessionQuery.listSessions() + sessionProjectionCache.cachedSnapshot() — zero-I/O reads, consistent with the official session list.',
+        footCostEstimated:
+          'Amounts are estimated from the price table in this plugin\u2019s config. No monetary price data exists anywhere in the 287 official packages, so this is not a bill.',
+        footCostUnconfigured:
+          'Amounts are hidden because no price table is configured — the harness ships no price data, and this panel does not invent numbers.',
+        durationHours: '{value} h',
+        durationMinutes: '{value} min',
+        durationSeconds: '{value} s',
+        durationMs: '{value} ms',
+        durationNone: '—',
+      },
+    };
+
+    /** 官方 translate() 用的插值语法是 {name}。 */
+    function interpolate(template, params) {
+      if (params === undefined) return template;
+      return template.replace(/\{(\w+)\}/g, (match, name) =>
+        name in params ? String(params[name]) : match,
+      );
+    }
+
+    /**
+     * 拿到翻译函数。
+     *
+     * 有 locale 服务时按官方 shipped 方式注册词典并 bind；
+     * 没有时退回内置中文词典——面板宁可显示中文，也不能把
+     * "statTokens" 这种原始键名渲染给用户。
+     */
+    function setupTranslator(ctx) {
+      const locale = typeof ctx.get === 'function' ? ctx.get('locale') : ctx.locale;
+      if (locale === undefined || typeof locale.bind !== 'function') {
+        return {
+          t: (key, params) => interpolate(DICT.zh[key] ?? key, params),
+          locale: undefined,
+        };
+      }
+      if (typeof locale.register === 'function') {
+        // register 返回 disposer，必须挂在 effect 上随插件卸载一起回收。
+        ctx.effect(() => locale.register(NS, DICT), 'usage-insights: dictionaries');
+      }
+      return { t: locale.bind(NS), locale };
+    }
+
+    /**
+     * 语言切换时强制重渲染。
+     * 官方界面在切语言后不需要刷新页面，面板也应如此。
+     */
+    function useLocaleRefresh(locale) {
+      const [, bump] = React.useState(0);
+      React.useEffect(() => {
+        if (locale === undefined || typeof locale.subscribe !== 'function') return undefined;
+        return locale.subscribe(() => bump((value) => value + 1));
+      }, [locale]);
+    }
 
     /* ------------------------------------------------------------ 主题令牌 */
 
-    // 通过子令牌（-font-size / -line-height / -font-weight）而不是 font 简写，
-    // 这样单个令牌缺失时只退化一个属性。
     const type = (scale, fallbackSize) => ({
       fontSize: `var(--dsw-font-${scale}-font-size, ${fallbackSize}px)`,
       lineHeight: `var(--dsw-font-${scale}-line-height, ${Math.round(fallbackSize * 1.5)}px)`,
@@ -55,7 +226,6 @@ window.__ModuleLoader__.load({
       success: 'var(--dsw-alias-state-success-primary, currentColor)',
       warn: 'var(--dsw-alias-state-warn-primary, currentColor)',
       error: 'var(--dsw-alias-state-error-primary, currentColor)',
-      hover: 'var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.10))',
     };
 
     const radius = {
@@ -79,12 +249,12 @@ window.__ModuleLoader__.load({
         : '—';
     }
 
-    function formatDuration(ms) {
-      if (typeof ms !== 'number' || !Number.isFinite(ms) || ms === 0) return '—';
-      if (ms >= 3_600_000) return `${(ms / 3_600_000).toFixed(1)} h`;
-      if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)} min`;
-      if (ms >= 1000) return `${(ms / 1000).toFixed(1)} s`;
-      return `${Math.round(ms)} ms`;
+    function formatDuration(ms, t) {
+      if (typeof ms !== 'number' || !Number.isFinite(ms) || ms === 0) return t('durationNone');
+      if (ms >= 3_600_000) return t('durationHours', { value: (ms / 3_600_000).toFixed(1) });
+      if (ms >= 60_000) return t('durationMinutes', { value: (ms / 60_000).toFixed(1) });
+      if (ms >= 1000) return t('durationSeconds', { value: (ms / 1000).toFixed(1) });
+      return t('durationMs', { value: Math.round(ms) });
     }
 
     function formatMoney(amount, currency) {
@@ -95,12 +265,11 @@ window.__ModuleLoader__.load({
     }
 
     function formatDate(ms) {
-      try {
-        const d = new Date(ms);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      } catch {
-        return '—';
-      }
+      const date = new Date(ms);
+      if (Number.isNaN(date.getTime())) return '—';
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${date.getFullYear()}-${month}-${day}`;
     }
 
     /* ------------------------------------------------------------ 小组件 */
@@ -182,12 +351,12 @@ window.__ModuleLoader__.load({
     }
 
     /** 横向堆叠条：未缓存输入 / 缓存读取 / 缓存写入 / 输出。 */
-    function TokenBar({ tokens }) {
+    function TokenBar({ tokens, t }) {
       const segments = [
-        { key: 'uncachedInputTokens', label: '未缓存输入', color: C.accent },
-        { key: 'cacheReadTokens', label: '缓存读取', color: C.success },
-        { key: 'cacheWriteTokens', label: '缓存写入', color: C.warn },
-        { key: 'outputTokens', label: '输出', color: C.text3 },
+        { key: 'uncachedInputTokens', label: t('segUncachedInput'), color: C.accent },
+        { key: 'cacheReadTokens', label: t('segCacheRead'), color: C.success },
+        { key: 'cacheWriteTokens', label: t('segCacheWrite'), color: C.warn },
+        { key: 'outputTokens', label: t('segOutput'), color: C.text3 },
       ];
       const total = tokens.total > 0 ? tokens.total : 1;
       return h(
@@ -245,19 +414,29 @@ window.__ModuleLoader__.load({
     }
 
     function SectionTitle({ children }) {
-      return h('div', { style: { ...T.s, color: C.text, fontWeight: 600, margin: '18px 0 8px' } }, children);
+      return h(
+        'div',
+        { style: { ...T.s, color: C.text, fontWeight: 600, margin: '18px 0 8px' } },
+        children,
+      );
     }
 
     function Table({ head, rows }) {
       return h(
         'div',
-        { style: { border: `1px solid ${C.borderSoft}`, borderRadius: radius.md, overflow: 'hidden' } },
+        {
+          style: {
+            border: `1px solid ${C.borderSoft}`,
+            borderRadius: radius.md,
+            overflow: 'hidden',
+          },
+        },
         h(
           'div',
           {
             style: {
               display: 'grid',
-              gridTemplateColumns: head.map((c) => c.width).join(' '),
+              gridTemplateColumns: head.map((column) => column.width).join(' '),
               gap: 8,
               padding: '8px 12px',
               background: C.cardAlt,
@@ -274,7 +453,7 @@ window.__ModuleLoader__.load({
               key: row.key ?? index,
               style: {
                 display: 'grid',
-                gridTemplateColumns: head.map((c) => c.width).join(' '),
+                gridTemplateColumns: head.map((column) => column.width).join(' '),
                 gap: 8,
                 padding: '8px 12px',
                 borderTop: `1px solid ${C.borderSoft}`,
@@ -283,7 +462,16 @@ window.__ModuleLoader__.load({
                 alignItems: 'center',
               },
             },
-            row.cells.map((cell, cellIndex) => h('div', { key: cellIndex, style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, cell)),
+            row.cells.map((cell, cellIndex) =>
+              h(
+                'div',
+                {
+                  key: cellIndex,
+                  style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+                },
+                cell,
+              ),
+            ),
           ),
         ),
       );
@@ -295,28 +483,26 @@ window.__ModuleLoader__.load({
         'div',
         { style: { display: 'flex', alignItems: 'flex-end', gap: 3, height: 72, padding: '0 2px' } },
         days.map((day) =>
-          h(
-            'div',
-            {
-              key: day.day,
-              title: `${day.day}  ${formatTokens(day.tokens.total)} tokens  ${day.sessions} 会话`,
-              style: {
-                flex: '1 1 0',
-                minWidth: 3,
-                height: `${Math.max(3, (day.tokens.total / max) * 100)}%`,
-                background: C.accent,
-                opacity: 0.85,
-                borderRadius: '2px 2px 0 0',
-              },
+          h('div', {
+            key: day.day,
+            title: `${day.day}  ${formatTokens(day.tokens.total)} tokens  ·  ${day.sessions}`,
+            style: {
+              flex: '1 1 0',
+              minWidth: 3,
+              height: `${Math.max(3, (day.tokens.total / max) * 100)}%`,
+              background: C.accent,
+              opacity: 0.85,
+              borderRadius: '2px 2px 0 0',
             },
-          ),
+          }),
         ),
       );
     }
 
     /* ------------------------------------------------------------- 面板 */
 
-    function Panel() {
+    function Panel({ t, locale }) {
+      useLocaleRefresh(locale);
       const [windowKind, setWindowKind] = React.useState('7d');
       const [state, setState] = React.useState({ status: 'loading' });
 
@@ -330,16 +516,16 @@ window.__ModuleLoader__.load({
           })
             .then(async (response) => {
               const body = await response.json().catch(() => null);
-              if (!response.ok) {
-                throw new Error(body?.message ?? `HTTP ${response.status}`);
-              }
+              if (!response.ok) throw new Error(body?.message ?? `HTTP ${response.status}`);
               return body;
             })
             .then((data) => {
               if (!cancelled) setState({ status: 'ready', data });
             })
             .catch((error) => {
-              if (!cancelled) setState({ status: 'error', message: String(error.message ?? error) });
+              if (!cancelled) {
+                setState({ status: 'error', message: String(error.message ?? error) });
+              }
             });
           return () => {
             cancelled = true;
@@ -367,13 +553,21 @@ window.__ModuleLoader__.load({
         );
 
       if (state.status === 'loading') {
-        return shell(h('div', { style: { ...T.s, color: C.text3 } }, '正在汇总会话数据…'));
+        return shell(h('div', { style: { ...T.s, color: C.text3 } }, t('loading')));
       }
 
       if (state.status === 'error') {
         return shell([
-          h('div', { key: 'title', style: { ...T.s, color: C.error, marginBottom: 8 } }, '取数失败'),
-          h('div', { key: 'msg', style: { ...T.xs, color: C.text2, marginBottom: 12 } }, state.message),
+          h(
+            'div',
+            { key: 'title', style: { ...T.s, color: C.error, marginBottom: 8 } },
+            t('errorTitle'),
+          ),
+          h(
+            'div',
+            { key: 'msg', style: { ...T.xs, color: C.text2, marginBottom: 12 } },
+            state.message,
+          ),
           h(
             'button',
             {
@@ -390,32 +584,35 @@ window.__ModuleLoader__.load({
                 cursor: 'pointer',
               },
             },
-            '重试',
+            t('retry'),
           ),
         ]);
       }
 
       const report = state.data?.report;
       if (report === undefined) {
-        return shell(h('div', { style: { ...T.s, color: C.text3 } }, 'Host 返回的数据格式不符合预期。'));
+        return shell(h('div', { style: { ...T.s, color: C.text3 } }, t('malformed')));
       }
 
-      const t = report.totals;
+      const totals = report.totals;
       const cost = report.cost ?? { available: false };
 
       return shell([
         h(
           'div',
-          { key: 'head', style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' } },
-          h('div', { style: { ...T.base, fontWeight: 600, flex: '1 1 auto' } }, '会话用量与成本'),
+          {
+            key: 'head',
+            style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+          },
+          h('div', { style: { ...T.base, fontWeight: 600, flex: '1 1 auto' } }, t('panel')),
           h(Segmented, {
             value: windowKind,
             onChange: setWindowKind,
             options: [
-              { value: '24h', label: '24 小时' },
-              { value: '7d', label: '7 天' },
-              { value: '30d', label: '30 天' },
-              { value: 'all', label: '全部' },
+              { value: '24h', label: t('win24h') },
+              { value: '7d', label: t('win7d') },
+              { value: '30d', label: t('win30d') },
+              { value: 'all', label: t('winAll') },
             ],
           }),
           h(
@@ -423,7 +620,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               onClick: () => load(windowKind),
-              title: '重新汇总',
+              title: t('refreshTitle'),
               style: {
                 ...T.xs,
                 padding: '5px 10px',
@@ -434,7 +631,7 @@ window.__ModuleLoader__.load({
                 cursor: 'pointer',
               },
             },
-            '刷新',
+            t('refresh'),
           ),
         ),
 
@@ -452,102 +649,132 @@ window.__ModuleLoader__.load({
           [
             h(Stat, {
               key: 'tokens',
-              label: 'Token 总量',
-              value: formatTokens(t.tokens.total),
-              hint: `${t.sessionsWithUsage}/${t.sessions} 个会话有用量`,
+              label: t('statTokens'),
+              value: formatTokens(totals.tokens.total),
+              hint: t('hintSessions', {
+                withUsage: totals.sessionsWithUsage,
+                total: totals.sessions,
+              }),
             }),
             h(Stat, {
               key: 'cache',
-              label: '缓存命中率',
-              value: formatPercent(t.tokens.cacheHitRate),
-              hint: `缓存读取 ${formatTokens(t.tokens.cacheReadTokens)}`,
+              label: t('statCache'),
+              value: formatPercent(totals.tokens.cacheHitRate),
+              hint: t('hintCacheRead', { value: formatTokens(totals.tokens.cacheReadTokens) }),
             }),
             h(Stat, {
               key: 'output',
-              label: '输出 token',
-              value: formatTokens(t.tokens.outputTokens),
-              hint: `轮次 ${t.stats.turns} / 步 ${t.stats.steps}`,
+              label: t('statOutput'),
+              value: formatTokens(totals.tokens.outputTokens),
+              hint: t('hintTurns', { turns: totals.stats.turns, steps: totals.stats.steps }),
             }),
             cost.available
               ? h(Stat, {
                   key: 'cost',
-                  label: '估算成本',
+                  label: t('statCost'),
                   value: formatMoney(cost.amount, cost.currency),
-                  hint: '按你配置的价目表估算，非账单',
+                  hint: t('hintCostEstimated'),
                   tone: 'warn',
                 })
               : h(Stat, {
                   key: 'cost',
-                  label: '估算成本',
-                  value: '未配置',
-                  hint: '官方不提供价格数据，需在插件 config 里填价目表',
+                  label: t('statCost'),
+                  value: t('costUnconfigured'),
+                  hint: t('hintCostUnconfigured'),
                   tone: 'muted',
                 }),
           ],
         ),
 
-        h(SectionTitle, { key: 't1' }, 'Token 构成'),
-        h(Card, { key: 'bar' }, h(TokenBar, { tokens: t.tokens })),
+        h(SectionTitle, { key: 't1' }, t('sectionTokens')),
+        h(Card, { key: 'bar' }, h(TokenBar, { tokens: totals.tokens, t })),
 
         h(
           'div',
           {
             key: 'meta',
-            style: { display: 'flex', gap: 18, flexWrap: 'wrap', marginTop: 10, ...T.xxs, color: C.text3 },
+            style: {
+              display: 'flex',
+              gap: 18,
+              flexWrap: 'wrap',
+              marginTop: 10,
+              ...T.xxs,
+              color: C.text3,
+            },
           },
           [
-            h('span', { key: 'llm' }, `模型耗时 ${formatDuration(t.stats.llmMs)}`),
-            h('span', { key: 'tool' }, `工具耗时 ${formatDuration(t.stats.toolMs)}`),
-            h('span', { key: 'wall' }, `合计 ${formatDuration(t.stats.wallMs)}`),
-            h('span', { key: 'live' }, `进行中会话 ${t.liveSessions}`),
-            h('span', { key: 'at' }, `汇总于 ${new Date(report.generatedAt).toLocaleTimeString()}`),
+            h('span', { key: 'llm' }, `${t('metaLlm')} ${formatDuration(totals.stats.llmMs, t)}`),
+            h('span', { key: 'tool' }, `${t('metaTool')} ${formatDuration(totals.stats.toolMs, t)}`),
+            h(
+              'span',
+              { key: 'wall' },
+              `${t('metaTotal')} ${formatDuration(totals.stats.wallMs, t)}`,
+            ),
+            h('span', { key: 'live' }, `${t('metaLive')} ${totals.liveSessions}`),
+            h(
+              'span',
+              { key: 'at' },
+              t('metaGeneratedAt', { time: new Date(report.generatedAt).toLocaleTimeString() }),
+            ),
           ],
         ),
 
-        report.byWorkspace.length > 0 ? h(SectionTitle, { key: 't2' }, '按工作区') : null,
+        report.byWorkspace.length > 0 ? h(SectionTitle, { key: 't2' }, t('sectionWorkspace')) : null,
         report.byWorkspace.length > 0
           ? h(Table, {
               key: 'ws',
               head: [
-                { key: 'label', label: '工作区', width: 'minmax(0,2fr)' },
-                { key: 'sessions', label: '会话', width: '64px' },
-                { key: 'tokens', label: 'Token', width: '88px' },
-                { key: 'cache', label: '命中率', width: '72px' },
-                { key: 'cost', label: cost.available ? '估算成本' : '成本', width: '116px' },
+                { key: 'label', label: t('colWorkspace'), width: 'minmax(0,2fr)' },
+                { key: 'sessions', label: t('colSessions'), width: '64px' },
+                { key: 'tokens', label: t('colTokens'), width: '88px' },
+                { key: 'cache', label: t('colCacheHit'), width: '72px' },
+                {
+                  key: 'cost',
+                  label: cost.available ? t('colEstimatedCost') : t('colCost'),
+                  width: '116px',
+                },
               ],
               rows: report.byWorkspace.map((workspace) => ({
                 key: workspace.cwd ?? workspace.label,
+                // 工作区名缺失时用本地化文案，而不是让 Host 侧的中文兜底串漏出来。
                 cells: [
-                  workspace.label,
+                  workspace.cwd === null || workspace.cwd === undefined
+                    ? t('unknownWorkspace')
+                    : workspace.label,
                   String(workspace.sessions),
                   formatTokens(workspace.tokens.total),
                   formatPercent(workspace.tokens.cacheHitRate),
-                  cost.available ? formatMoney(workspace.cost, cost.currency) : '未配置',
+                  cost.available
+                    ? formatMoney(workspace.cost, cost.currency)
+                    : t('costUnconfigured'),
                 ],
               })),
             })
           : null,
 
-        report.byDay.length > 0 ? h(SectionTitle, { key: 't3' }, '按天（最近 14 天）') : null,
+        report.byDay.length > 0 ? h(SectionTitle, { key: 't3' }, t('sectionDaily')) : null,
         report.byDay.length > 0
           ? h(Card, { key: 'bars' }, h(DailyBars, { days: report.byDay.slice(-14) }))
           : null,
 
-        report.topSessions.length > 0 ? h(SectionTitle, { key: 't4' }, 'Token 最多的会话') : null,
+        report.topSessions.length > 0 ? h(SectionTitle, { key: 't4' }, t('sectionTop')) : null,
         report.topSessions.length > 0
           ? h(Table, {
               key: 'top',
               head: [
-                { key: 'title', label: '会话', width: 'minmax(0,3fr)' },
-                { key: 'workspace', label: '工作区', width: 'minmax(0,1.2fr)' },
-                { key: 'date', label: '创建于', width: '96px' },
-                { key: 'tokens', label: 'Token', width: '84px' },
+                { key: 'title', label: t('colSession'), width: 'minmax(0,3fr)' },
+                { key: 'workspace', label: t('colWorkspace'), width: 'minmax(0,1.2fr)' },
+                { key: 'date', label: t('colCreatedAt'), width: '96px' },
+                { key: 'tokens', label: t('colTokens'), width: '84px' },
               ],
               rows: report.topSessions.map((session) => ({
                 key: session.id,
                 cells: [
-                  session.title,
-                  session.workspaceLabel,
+                  // 标题缺失时用本地化文案；Host 仍会给中文兜底串，这里优先取原值。
+                  session.title ?? t('untitled'),
+                  session.cwd === null || session.cwd === undefined
+                    ? t('unknownWorkspace')
+                    : session.workspaceLabel,
                   formatDate(session.createdAt),
                   formatTokens(session.tokens.total),
                 ],
@@ -559,11 +786,13 @@ window.__ModuleLoader__.load({
           'div',
           { key: 'foot', style: { ...T.xxs, color: C.caption, marginTop: 20, lineHeight: '18px' } },
           [
-            h('div', { key: 'a' }, '口径：时间窗按「会话创建时间」筛选，不是最后活动时间；官方投影缓存里没有可靠的最后活动字段。'),
-            h('div', { key: 'b' }, '数据源：sessionQuery.listSessions() + sessionProjectionCache.cachedSnapshot()，为零 I/O 读取，数值与官方会话列表一致。'),
-            cost.available
-              ? h('div', { key: 'c' }, '金额：按你在插件 config 里配置的价目表估算。官方全部 287 个包中不存在货币价格数据，因此这不是账单。')
-              : h('div', { key: 'c' }, '金额：未配置价目表，故不显示任何金额——官方不提供价格数据，此处不臆造数字。'),
+            h('div', { key: 'a' }, t('footWindow')),
+            h('div', { key: 'b' }, t('footSource')),
+            h(
+              'div',
+              { key: 'c' },
+              cost.available ? t('footCostEstimated') : t('footCostUnconfigured'),
+            ),
           ],
         ),
       ]);
@@ -598,23 +827,36 @@ window.__ModuleLoader__.load({
 
     return {
       // 本半边依赖 slots 服务；缺它就保持未激活而不是抛错。
+      // locale 是可选依赖，用 ctx.get('locale') 探测，不放进 inject——
+      // 否则一个没有 locale 服务的 profile 会让整个面板直接消失。
       inject: ['slots'],
       apply(ctx) {
+        const { t, locale } = setupTranslator(ctx);
+        // inject 返回的对象会作为额外 props 合并进组件。保持引用稳定，
+        // 避免每次渲染产生新对象造成无谓的重渲染。
+        const panelProps = { t, locale };
+
         // 左侧栏图标：侧栏自己负责 selectPanel(id)，这里只画字形。
+        // label 用函数形式，侧栏在语言切换时会重新同步它
+        // （ui-sidebar 里有 ctx.locale.subscribe(syncPanels)）。
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
             {
               name: 'sidebar.panellist',
               id: PANEL_ID,
               order: 40,
-              label: () => '会话用量与成本',
+              locale: NS,
+              label: () => t('panel'),
             },
             Icon,
           ),
         );
         // 面板主体：main 是 keyed slot，key 必须与上面的 id 相同。
         ctx.slots.inject('main', () =>
-          ctx.slots.register({ name: 'main', key: PANEL_ID }, Panel),
+          ctx.slots.register(
+            { name: 'main', key: PANEL_ID, locale: NS, inject: () => panelProps },
+            Panel,
+          ),
         );
       },
     };
