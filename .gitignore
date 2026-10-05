@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.log
+
+# devkit 从 app.asar 抽出的官方文档缓存（体积大、可随时重建）
+.cache/

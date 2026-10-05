@@ -1,0 +1,24 @@
+# 安装本 bundle 时叠加进当前 profile（桌面版为 ~/.dsh/profiles/desktop）。
+#
+# 只有一行：本插件自带 Host 与 Client 两半，依赖的 sessionQuery /
+# sessionProjectionCache / connection 都由 dsh-base 提供，无需额外插入。
+#
+# config 可以按需覆盖：
+#   window    面板默认时间窗，24h | 7d | 30d | all（默认 7d）
+#   currency  成本显示货币代码（默认 CNY）
+#   topN      「Token 最多的会话」条数（默认 10）
+#   pricing   价目表，单位是「每 100 万 token」。官方不提供任何价格数据，
+#             不配置就一直显示「未配置」，绝不臆造金额。示例：
+#               pricing:
+#                 default:
+#                   input: 2
+#                   output: 8
+#                   cacheRead: 0.2
+#                   cacheWrite: 2
+- insert:
+    - id: usage-insights
+      name: '@local/dsh-usage-insights'
+      config:
+        window: 7d
+        currency: CNY
+        topN: 10

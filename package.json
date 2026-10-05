@@ -1,0 +1,17 @@
+{
+  "name": "dsh-desktop-lab",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "为 DeepSeek Harness 桌面版服务的插件项目：devkit 工具链 + usage-insights 跨会话用量与成本面板",
+  "scripts": {
+    "test": "node --test \"packages/*/test/*.test.mjs\"",
+    "check": "node packages/devkit/bin/dsh-devkit.mjs check packages/usage-insights",
+    "docs": "node packages/devkit/bin/dsh-devkit.mjs docs",
+    "devkit": "node packages/devkit/bin/dsh-devkit.mjs",
+    "real": "node packages/usage-insights/test/report-real.mjs"
+  },
+  "engines": {
+    "node": ">=22.15"
+  }
+}
