@@ -1,0 +1,32 @@
+{
+  "name": "@local/dsh-session-search",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "给模型一个检索自己过去会话的工具：官方会话查询服务有完整能力，却没有模型可调用的入口。",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "meta": {
+    "title": "历史会话检索",
+    "description": "为模型提供 search_past_sessions 工具，可按字面量检索本机历史会话并返回带上下文的片段。"
+  },
+  "icon": "./icon.svg",
+  "files": [
+    "index.js",
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  }
+}

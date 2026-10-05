@@ -1,0 +1,15 @@
+# 安装本 bundle 时叠加进当前 profile（桌面版为 ~/.dsh/profiles/desktop）。
+#
+# 纯 Host 插件，没有浏览器半边：只往模型工具表里加一个 search_past_sessions。
+# 依赖的 tools 与 sessionQuery 都由 dsh-base 提供，无需额外插入。
+#
+# config 可选：
+#   maxCandidateSessions  最多扫描多少个候选会话（默认 40，上限 200）。
+#                         官方 filterEvents 会读整个会话日志，这个值直接决定单次调用的耗时。
+#   maxHitsPerSession     单个会话最多取多少条命中（默认 5，上限 50）。
+- insert:
+    - id: session-search
+      name: '@local/dsh-session-search'
+      config:
+        maxCandidateSessions: 40
+        maxHitsPerSession: 5

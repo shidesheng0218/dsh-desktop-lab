@@ -1,0 +1,4 @@
+{
+  "title": "Session History Search",
+  "description": "Adds the search_past_sessions tool so the model can look up earlier sessions on this machine by literal text."
+}

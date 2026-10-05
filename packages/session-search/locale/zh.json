@@ -1,0 +1,4 @@
+{
+  "title": "历史会话检索",
+  "description": "为模型提供 search_past_sessions 工具，可按字面量检索本机历史会话。"
+}

@@ -2,12 +2,15 @@
 
 为 **DeepSeek Harness 桌面版**（`@deepseek-ai/dsh-desktop` 0.2.0-rc.2）开发插件的项目。
 
-包含两件东西：
+包含三件东西：
 
 | 包 | 作用 |
 |---|---|
 | [`packages/devkit`](packages/devkit) | 工具链：抽取 `app.asar` 里的官方文档与源码、生成插件骨架、装机前静态校验 |
-| [`packages/usage-insights`](packages/usage-insights) | 插件本体：**跨会话用量与成本面板**，挂在桌面版左侧栏 |
+| [`packages/usage-insights`](packages/usage-insights) | 插件：**跨会话用量与成本面板**，挂在桌面版左侧栏；附 JSON/CSV 导出 |
+| [`packages/session-search`](packages/session-search) | 插件：给模型一个**检索自己过去会话**的工具 `search_past_sessions`（纯 Host，无界面） |
+
+三个包互相独立，可以只装其中一个。
 
 ---
 
@@ -97,6 +100,42 @@ Plugins 页面找到本插件、编辑它的 config 行：
 **面板上的金额是估算，不是账单。** 官方投影缓存里没有路由/模型维度，
 所以全部 token 按同一条价目表折算；这个口径同时写在面板页脚和 `lib/pricing.js` 的注释里。
 
+### 4. 历史会话检索（`session-search`）
+
+装法同上，把路径换成 `packages/session-search`。它是**纯 Host 插件、没有界面**——
+装好之后模型就多了一个工具 `search_past_sessions`，可以按字面量检索本机历史会话：
+
+```
+query        必填。要查找的字面量（大小写不敏感，不是正则）
+limit        返回条数上限，默认 10，封顶 50
+cwd          只搜某个工作区（精确匹配）
+session_id   只搜某一个会话
+days         只搜最近 N 天创建的会话
+```
+
+返回值里每条命中带会话 id、标题、工作区、时间、事件序号和**带上下文的片段**，
+外加 `notes` 说明本次扫描了多少、是否有截断。
+
+**为什么做这个**：官方 `dsh-session-query` 的 Dev Note 指向 `../tool-session-query/`，
+但**该包不在 287 个官方包里**——会话历史有完整的查询服务，却没有模型可调用的入口。
+这是官方自己留的空位。
+
+**关键约束（决定它会不会拖慢你）**：官方 `filterEvents()` 内部会**读整个会话日志**，
+所以候选会话数必须封顶。默认最多扫 40 个会话、每会话最多取 5 条命中，
+`notes` 会如实告诉你扫了多少、有没有截断。可在插件 config 里调：
+
+```yaml
+- id: session-search
+  name: '@local/dsh-session-search'
+  config:
+    maxCandidateSessions: 40    # 上限 200
+    maxHitsPerSession: 5        # 上限 50
+```
+
+> **这个插件没有经过真实安装验证**，也没有在真实会话历史上跑过端到端——
+> 见下方「验证状态」。它全部的逻辑与注册形状都有测试覆盖，但「Loader 是否挂起它、
+> 模型是否真能调通」需要你装一次确认。
+
 ---
 
 ## devkit 用法
@@ -142,6 +181,11 @@ packages/usage-insights/
 ├── lib/pricing.js      价目表与成本估算
 ├── client.js           Client 半边：左侧栏图标 + 面板（React，无构建步骤，zh/en 双语）
 └── test/               81 个用例
+
+packages/session-search/
+├── index.js            纯 Host：手写工具定义并注册（不 import 任何官方包）
+├── lib/search.js       纯逻辑：候选筛选 / 摘要截取 / 结果装配（无 DSH 依赖）
+└── test/               49 个用例
 ```
 
 取数链路（每一处 API 都从官方**已构建源码**核对，不是照 README 猜的）：
@@ -171,13 +215,20 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 
 - `packages/devkit/test` 16 个用例，含 14 个刻意构造的坏包/坏 bundle，全部被正确报出
 - `packages/usage-insights/test` 81 个用例：聚合核心 25、Host 集成 23、Client 契约 14、导出契约 19
-- **变异测试**：先后注入 15 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
+- `packages/session-search/test` 49 个用例：纯逻辑 26（候选截断/Unicode 边界/排序）、工具注册与执行 23
+- **变异测试**：先后注入 23 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
   字面颜色、成本退化 0 元、金额措辞丢失、时间窗只筛不标注、en 词典缺键、
   en 值写成中文、绕开 `t()` 硬编码、词典注册脱离 `ctx.effect`、
   报告丢 `schemaVersion`、CSV 丢 BOM、去掉公式注入防护、sessions 表静默截断、
-  未知 format 静默回退），全部被测试抓住 —— 证明测试能失败，不是摆设。
+  未知 format 静默回退；以及 session-search 的去掉候选上限、去掉每会话上限、
+  去掉单会话容错、去掉空查询保护、参数 schema 混入子集外关键字、忽略取消信号、
+  按 UTF-16 码元切摘要、不声明可并发），全部被测试抓住 —— 证明测试能失败，不是摆设。
   其中三轮有漏网（断言被页脚文案意外满足、只查了错误态、BOM 断言用了常量做比较），
   都是补强断言后才收敛；变异测试的价值正在于此。
+- **工具注册形状**：`session-search` 有一条测试逐节点校验参数与输出 schema
+  **只使用官方支持的子集**（`type/oneOf/properties/required/additionalProperties/items/enum/const`
+  + 注解）。这不是形式主义：给 `limit` 加一个 `minimum` 就会让 `tools.register()` 抛错、
+  整个插件加载失败，而官方 Schema 子集里**没有** `minimum`/`maximum`/`maxLength`。
 - **导出契约**：键集冻结测试锁死 JSON 形状；CSV 校验原始字节里的 BOM、
   RFC 4180 转义、公式注入防护（且不误伤负数）；route 层校验 400 而非静默回退
 - **真实数据交叉验证**：Host 链路跑在本机真实投影缓存上，与独立重算的结果逐位一致
@@ -190,15 +241,22 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 
 **未验证（能力所限，如实说明）：**
 
-- **插件尚未安装进 GUI。** 本会话没有 `plugin_manager` 工具（该行默认 `disabled: true`），
-  profile 写入在沙箱工作区之外。所以：Loader 是否真的挂起这个包、路由是否真的被服务、
-  面板在真实 React 下的外观——都还没有被观察过，需要你装一次确认。
+- **两个插件都还没装进 GUI。** 本会话没有 `plugin_manager` 工具（该行默认 `disabled: true`），
+  profile 写入在沙箱工作区之外。所以：Loader 是否真的挂起这些包、路由是否真的被服务、
+  面板在真实 React 下的外观、模型是否真能调通 `search_past_sessions`——
+  都还没有被观察过，需要你装一次确认。
+- **`session-search` 没有在真实会话历史上跑过端到端。** 它的候选筛选、摘要截取、
+  截断语义、注册形状都有测试覆盖（49 个用例、8 处变异全部被捕获），
+  但「真实日志喂进官方 `filterEvents` 会返回什么」只在假上下文里验证过，
+  磁盘上真实的 zstd 多帧日志路径没有被这条链路跑通。**第一次使用时请留意耗时**：
+  默认最多扫 40 个会话，若明显卡顿就把 `maxCandidateSessions` 调小。
 - 界面用到的主题令牌名取自官方 `dsh-client-ui-theme` 的令牌表（403 个），
   但每个都带兜底值，没有在真实渲染里逐一核对。
 - 面板未做视觉验证（无浏览器控制）。
 
 安装后如果出问题，可对照的排查点：面板空白 → 看 DevTools console 有没有
-`slot entry crashed in '<slot>'`；面板显示取数失败 → 面板会直接显示 Host 返回的原因。
+`slot entry crashed in '<slot>'`；面板显示取数失败 → 面板会直接显示 Host 返回的原因；
+工具没出现在工具表里 → 确认 bundle 装好后 profile 里的行是 `enabled` 且 `fiberPhase` 正常。
 
 ---
 
@@ -222,7 +280,7 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 ## 开发
 
 ```bash
-npm test        # 97 个用例
+npm test        # 146 个用例
 npm run check   # 插件包静态校验
 npm run docs    # 重建官方文档缓存
 npm run real    # 真实数据报告
