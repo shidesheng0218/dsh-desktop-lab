@@ -53,13 +53,25 @@ node packages/devkit/bin/dsh-devkit.mjs install packages/usage-insights
 4. **Install** → 完成后选 **Enable now**
 5. 左侧栏出现柱状图图标，点开即是面板
 
-### 2. 不想装插件也能看数
+### 2. 不想装插件也能看数 / 导出
 
 ```bash
 npm run real                                   # 用本机真实数据直接出报告
 node packages/usage-insights/test/report-real.mjs --window 30d --top 10
 node packages/usage-insights/test/report-real.mjs \
   --pricing '{"default":{"input":2,"output":8,"cacheRead":0.2,"cacheWrite":2}}' --currency CNY
+
+# 导出：JSON 与 CSV 和插件面板出自同一份 lib/report.js，不会算出两个数
+node packages/usage-insights/test/report-real.mjs --format json
+node packages/usage-insights/test/report-real.mjs --format csv --table sessions --out usage.csv
+```
+
+CSV 四个表：`summary`（一行总计）、`workspace`、`daily`、`sessions`（一行一个会话，最细粒度）。
+对外字段契约见 **[`docs/report-schema.md`](docs/report-schema.md)**：`schemaVersion: 1`，
+键集由契约测试冻结，字段只增不改不删。装了插件后同一份数据也能从 HTTP 取：
+
+```
+GET /api/usage-insights?window=7d&format=csv&table=sessions
 ```
 
 ### 3. 配置价目表
@@ -124,10 +136,12 @@ locale 键不一致、图标越界或缺失、声明了运行时依赖、
 ```
 packages/usage-insights/
 ├── index.js            Host 半边：注入官方服务取数 + 注册 /api 路由
-├── lib/core.js         纯逻辑：规范化 + 折叠成报告（无 DSH 依赖，可单测）
+├── lib/core.js         纯逻辑：规范化 + 折叠（无 DSH 依赖，可单测）
+├── lib/report.js       报告构建 + 导出列定义（CLI 与 Host 共用的唯一实现）
+├── lib/export.js       CSV/JSON 序列化（含公式注入防护与 BOM）
 ├── lib/pricing.js      价目表与成本估算
 ├── client.js           Client 半边：左侧栏图标 + 面板（React，无构建步骤，zh/en 双语）
-└── test/               55 个用例
+└── test/               81 个用例
 ```
 
 取数链路（每一处 API 都从官方**已构建源码**核对，不是照 README 猜的）：
@@ -156,12 +170,16 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 **已验证：**
 
 - `packages/devkit/test` 16 个用例，含 14 个刻意构造的坏包/坏 bundle，全部被正确报出
-- `packages/usage-insights/test` 55 个用例：聚合核心 25 个、Host 集成 16 个、Client 契约 14 个
-- **变异测试**：先后注入 10 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
+- `packages/usage-insights/test` 81 个用例：聚合核心 25、Host 集成 23、Client 契约 14、导出契约 19
+- **变异测试**：先后注入 15 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
   字面颜色、成本退化 0 元、金额措辞丢失、时间窗只筛不标注、en 词典缺键、
-  en 值写成中文、绕开 `t()` 硬编码、词典注册脱离 `ctx.effect`），
-  全部被测试抓住 —— 证明测试能失败，不是摆设。
-  其中前两轮各有漏网（断言被页脚文案意外满足、只查了错误态），补强后才收敛。
+  en 值写成中文、绕开 `t()` 硬编码、词典注册脱离 `ctx.effect`、
+  报告丢 `schemaVersion`、CSV 丢 BOM、去掉公式注入防护、sessions 表静默截断、
+  未知 format 静默回退），全部被测试抓住 —— 证明测试能失败，不是摆设。
+  其中三轮有漏网（断言被页脚文案意外满足、只查了错误态、BOM 断言用了常量做比较），
+  都是补强断言后才收敛；变异测试的价值正在于此。
+- **导出契约**：键集冻结测试锁死 JSON 形状；CSV 校验原始字节里的 BOM、
+  RFC 4180 转义、公式注入防护（且不误伤负数）；route 层校验 400 而非静默回退
 - **真实数据交叉验证**：Host 链路跑在本机真实投影缓存上，与独立重算的结果逐位一致
 - Client 半边在模拟浏览器环境里真正执行过，加载态/成功态/失败态都渲染出内容
 - **locale 接线完整性**：英文渲染下断言「结果里不得出现任何中日韩字符」，
@@ -204,7 +222,7 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 ## 开发
 
 ```bash
-npm test        # 68 个用例
+npm test        # 97 个用例
 npm run check   # 插件包静态校验
 npm run docs    # 重建官方文档缓存
 npm run real    # 真实数据报告

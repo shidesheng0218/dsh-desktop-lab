@@ -19,7 +19,9 @@
  * 为什么不在 Host 侧做任何会失败的事：apply() 抛异常会拖垮整个 profile，
  * 所以取数失败被折成 HTTP 500 + JSON 错误体，面板能显示原因并重试。
  */
-import { aggregate, filterByWindow, normalizeSession } from './lib/core.js';
+import { normalizeSession } from './lib/core.js';
+import { TABLE_NAMES, TABLES, buildReport } from './lib/report.js';
+import { CSV_CONTENT_TYPE, JSON_CONTENT_TYPE, csvFilename, toCsv } from './lib/export.js';
 
 /** 路径必须位于 /api/ 之下。 */
 const DATA_PATH = '/api/usage-insights';
@@ -37,12 +39,16 @@ const VALID_WINDOWS = new Set(['24h', '7d', '30d', 'all']);
 export const inject = ['sessionQuery', 'sessionProjectionCache', 'connection'];
 
 /**
- * 把全量会话折叠成报告。
+ * 从 Host 服务取数并折叠成报告。
+ *
+ * 折叠本身交给 `lib/report.js` 的 buildReport —— 与 CLI 用的是同一份实现，
+ * 这样「面板显示的数」与「导出的数」不可能算出两个结果。
  * @param {object} ctx Cordis 上下文
  * @param {{pricing?:object, currency?:string, topN?:number}} config
  * @param {string} windowKind
+ * @param {boolean} includeSessions 是否携带全量会话明细（导出 sessions 表时必需）
  */
-async function buildReport(ctx, config, windowKind) {
+async function collectReport(ctx, config, windowKind, includeSessions) {
   const records = await ctx.sessionQuery.listSessions();
 
   const sessions = [];
@@ -67,38 +73,35 @@ async function buildReport(ctx, config, windowKind) {
     });
   }
 
-  const normalized = sessions.map(normalizeSession);
-  const now = Date.now();
-  const windowed = filterByWindow(normalized, { kind: windowKind, now });
-
-  const report = aggregate(windowed, {
-    now,
+  return buildReport(sessions.map(normalizeSession), {
+    window: windowKind,
     pricing: config.pricing,
     currency: config.currency,
     topN: config.topN,
-    // 时间窗要同时进「筛选」与「报告标注」：只传给 filterByWindow 会让
-    // report.window.kind 永远是 all，面板与数据就对不上了。
-    window: { kind: windowKind },
-  });
-
-  // 让面板能如实说明「有多少会话没有缓存数据」。
-  report.coverage = {
-    listed: normalized.length,
-    inWindow: windowed.length,
+    // 让面板能如实说明「有多少会话没有缓存数据」。
     withoutCacheRecord: missingCache,
-  };
+    includeSessions,
+  });
+}
 
-  return report;
+function textResponse(body, status, contentType, extraHeaders = {}) {
+  return new Response(body, {
+    status,
+    headers: {
+      'content-type': contentType,
+      'cache-control': 'no-store',
+      ...extraHeaders,
+    },
+  });
 }
 
 function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-    },
-  });
+  return textResponse(JSON.stringify(body), status, JSON_CONTENT_TYPE);
+}
+
+/** 400：参数非法时给出的可读原因，而不是静默回退到默认值。 */
+function badRequest(message) {
+  return jsonResponse({ ok: false, message }, 400);
 }
 
 /**
@@ -120,25 +123,44 @@ export function apply(ctx, config = {}) {
     methods: ['GET', 'HEAD'],
     requestBody: 'buffered',
     fetch: async (request) => {
-      const requested = new URL(request.url).searchParams.get('window');
-      const windowKind = requested !== null && VALID_WINDOWS.has(requested) ? requested : settings.window;
+      const params = new URL(request.url).searchParams;
+
+      const requestedWindow = params.get('window');
+      const windowKind =
+        requestedWindow !== null && VALID_WINDOWS.has(requestedWindow) ? requestedWindow : settings.window;
+
+      const format = params.get('format') ?? 'json';
+      const table = params.get('table') ?? 'summary';
 
       let response;
       try {
-        const report = await buildReport(ctx, settings, windowKind);
-        response = jsonResponse({
-          ok: true,
-          window: windowKind,
-          generatedAt: report.generatedAt,
-          report,
-        });
+        if (format !== 'json' && format !== 'csv') {
+          // 不静默回退：写错格式却拿到一个 JSON，比直接报错更难排查。
+          return badRequest(`未知的 format "${format}"；可用：json, csv`);
+        }
+        if (format === 'csv' && !Object.hasOwn(TABLES, table)) {
+          return badRequest(`未知的 table "${table}"；可用：${TABLE_NAMES.join(', ')}`);
+        }
+
+        const includeSessions = format === 'csv' && table === 'sessions';
+        const report = await collectReport(ctx, settings, windowKind, includeSessions);
+
+        if (format === 'csv') {
+          response = textResponse(toCsv(report, table), 200, CSV_CONTENT_TYPE, {
+            'content-disposition': `attachment; filename="${csvFilename(report, table)}"`,
+          });
+        } else {
+          response = jsonResponse({
+            ok: true,
+            window: windowKind,
+            generatedAt: report.generatedAt,
+            report,
+          });
+        }
       } catch (error) {
         ctx.logger?.warn?.('usage-insights: 汇总失败', error);
         response = jsonResponse(
-          {
-            ok: false,
-            message: `汇总失败：${error?.message ?? String(error)}`,
-          },
+          { ok: false, message: `汇总失败：${error?.message ?? String(error)}` },
           500,
         );
       }

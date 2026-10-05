@@ -316,3 +316,106 @@ test(
     assert.doesNotMatch(text, /NaN|Infinity|undefined/);
   },
 );
+
+/* -------------------------------------------------- 导出（格式协商） */
+
+test('默认返回 JSON，且不携带全量会话明细（面板只需要 topN）', async () => {
+  const ctx = setup();
+  const body = await (
+    await ctx.routes[0].fetch(request('http://127.0.0.1/api/usage-insights?window=all'))
+  ).json();
+  assert.equal(body.ok, true);
+  assert.equal(body.report.schemaVersion, 1);
+  assert.ok(!('sessions' in body.report), '默认响应不应带上全量明细');
+});
+
+test('format=csv 返回 CSV：正确的 content-type、下载头与 BOM', async () => {
+  const ctx = setup();
+  const response = await ctx.routes[0].fetch(
+    request('http://127.0.0.1/api/usage-insights?window=all&format=csv&table=workspace'),
+  );
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/csv/);
+  assert.match(
+    response.headers.get('content-disposition'),
+    /^attachment; filename="usage-insights-workspace-all-\d{4}-\d{2}-\d{2}\.csv"$/,
+  );
+
+  // 注意：不能断言 `csv.startsWith('\uFEFF')` —— Response.text() 走的是
+  // WHATWG 的 UTF-8 decode，会把前导 BOM 吃掉。必须校验原始字节。
+  const bytes = new Uint8Array(await response.clone().arrayBuffer());
+  assert.deepEqual(
+    [...bytes.slice(0, 3)],
+    [0xef, 0xbb, 0xbf],
+    'CSV 字节流必须以 UTF-8 BOM 开头，否则 Excel 打开中文乱码',
+  );
+
+  const csv = await response.text();
+  const lines = csv.replace('\uFEFF', '').trimEnd().split('\n');
+  assert.equal(lines.length, 2, '表头 + 1 个工作区行');
+  assert.match(lines[0], /^cwd,workspace,sessions,/);
+});
+
+test('format=csv&table=sessions 携带全量明细，行数等于会话数', async () => {
+  const ctx = setup();
+  const response = await ctx.routes[0].fetch(
+    request('http://127.0.0.1/api/usage-insights?window=all&format=csv&table=sessions'),
+  );
+  const csv = await response.text();
+  const lines = csv.replace('\uFEFF', '').trimEnd().split('\n');
+  // 夹具里有 3 个会话
+  assert.equal(lines.length, 4);
+  assert.match(lines[0], /^session_id,title,cwd,/);
+});
+
+test('未知 format 返回 400，而不是静默回退成 JSON', async () => {
+  const ctx = setup();
+  const response = await ctx.routes[0].fetch(
+    request('http://127.0.0.1/api/usage-insights?format=xml'),
+  );
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.equal(body.ok, false);
+  assert.match(body.message, /未知的 format/);
+});
+
+test('未知 table 返回 400 并列出可用表', async () => {
+  const ctx = setup();
+  const response = await ctx.routes[0].fetch(
+    request('http://127.0.0.1/api/usage-insights?format=csv&table=nope'),
+  );
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).message, /可用：.*summary/);
+});
+
+test('CSV 的 HEAD 请求返回同样的状态码与头，但没有响应体', async () => {
+  const ctx = setup();
+  const response = await ctx.routes[0].fetch(
+    request('http://127.0.0.1/api/usage-insights?format=csv&table=summary', 'HEAD'),
+  );
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/csv/);
+  assert.equal(await response.text(), '');
+});
+
+test('CSV 导出与 JSON 报告出自同一份数据（总计一致）', async () => {
+  const ctx = setup();
+  const route = ctx.routes[0];
+  const json = await (
+    await route.fetch(request('http://127.0.0.1/api/usage-insights?window=all'))
+  ).json();
+  const csv = await (
+    await route.fetch(
+      request('http://127.0.0.1/api/usage-insights?window=all&format=csv&table=summary'),
+    )
+  ).text();
+
+  const [headerLine, valueLine] = csv.replace('\uFEFF', '').trimEnd().split('\n');
+  const header = headerLine.split(',');
+  const values = valueLine.split(',');
+  const row = Object.fromEntries(header.map((key, index) => [key, values[index]]));
+
+  assert.equal(Number(row.total_tokens), json.report.totals.tokens.total);
+  assert.equal(Number(row.sessions), json.report.totals.sessions);
+  assert.equal(Number(row.schema_version), json.report.schemaVersion);
+});

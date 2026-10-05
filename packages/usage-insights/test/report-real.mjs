@@ -16,13 +16,20 @@
  * 用法：
  *   node test/report-real.mjs [--window 24h|7d|30d|all] [--top 10]
  *                             [--pricing '{"default":{"input":1,"output":2,"cacheRead":0.1}}']
- *                             [--currency CNY] [--json]
+ *                             [--currency CNY]
+ *                             [--format text|json|csv] [--table summary|workspace|daily|sessions]
+ *                             [--out <文件>]
+ *
+ *   --json 是 `--format json` 的别名，保留历史用法。
+ *   JSON 与插件面板出自同一份 lib/report.js，字段契约见 docs/report-schema.md。
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { aggregate, filterByWindow, normalizeSession } from '../lib/core.js';
+import { normalizeSession } from '../lib/core.js';
+import { buildReport } from '../lib/report.js';
+import { toCsv } from '../lib/export.js';
 
 function parseArgs(argv) {
   const options = {};
@@ -126,11 +133,6 @@ function main() {
   }
 
   const normalized = raw.map(normalizeSession);
-  const now = Date.now();
-  // 时间窗必须同时用于「筛选」和「报告标注」。
-  // 只传给 filterByWindow 会让报告头一直显示 all，与实际筛出来的数据不符。
-  const windowKind = typeof options.window === 'string' ? options.window : 'all';
-  const windowed = filterByWindow(normalized, { kind: windowKind, now });
 
   let pricing;
   if (typeof options.pricing === 'string') {
@@ -143,15 +145,39 @@ function main() {
     }
   }
 
-  const report = aggregate(windowed, {
-    now,
+  // 格式协商：`--json` 是 `--format json` 的别名（历史用法，保留）。
+  const format = typeof options.format === 'string' ? options.format : options.json ? 'json' : 'text';
+  if (!['json', 'csv', 'text'].includes(format)) {
+    process.stderr.write(`未知的 --format "${format}"；可用：text, json, csv\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const table = typeof options.table === 'string' ? options.table : 'summary';
+
+  // 折叠交给与 Host 半边共用的实现（lib/report.js），
+  // 这样 CLI 与插件面板不可能算出两个不同的数字。
+  const report = buildReport(normalized, {
+    window: typeof options.window === 'string' ? options.window : 'all',
     pricing,
-    window: { kind: windowKind },
     currency: typeof options.currency === 'string' ? options.currency : 'CNY',
     topN: Number(options.top ?? 10),
+    // CSV 的 sessions 表要全量明细；JSON 保持精简，不无谓放大面板负载。
+    includeSessions: format === 'csv' && table === 'sessions',
   });
+  report.coverage.skippedFiles = skipped;
 
-  if (options.json) {
+  if (format === 'csv') {
+    const csv = toCsv(report, table);
+    if (typeof options.out === 'string') {
+      fs.writeFileSync(options.out, csv);
+      process.stderr.write(`已写入 ${options.out}（${csv.length} 字节，表 ${table}）\n`);
+    } else {
+      process.stdout.write(csv);
+    }
+    return;
+  }
+
+  if (format === 'json') {
     process.stdout.write(`${JSON.stringify({ home, dir, skipped, report }, null, 2)}\n`);
     return;
   }
