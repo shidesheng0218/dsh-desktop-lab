@@ -14,6 +14,35 @@
 
 ---
 
+## 🏆 项目亮点
+
+### 工程质量保证
+- ✅ **146个测试用例** - usage-insights 81个 + session-search 49个 + devkit 16个
+- ✅ **31处变异测试** - 注入真实bug，100%被捕获，证明测试有效
+- ✅ **契约化导出** - JSON schemaVersion=1，CSV带BOM+公式注入防护
+- ✅ **API逐一核对** - 从官方已构建源码验证，不是猜的
+
+### 技术深度
+- 📚 **25,000字技术文档** - 架构对比、最佳实践、变异测试证据
+- 🔍 **287包深度审计** - 识别14个可补足的能力缺口
+- 🛠️ **完整工具链** - asar提取 + 16条静态检查
+
+### 差异化价值
+- 🔒 **本地优先** - 零数据上传，完全离线可用
+- 📊 **永不漂移** - 面板与导出共用同一份代码
+- 🌍 **多平台路线** - Phase 2支持Claude Desktop + Cursor
+
+### 📖 深度阅读
+
+想了解更多？我们写了25,000字技术文档：
+
+- [**DSH vs Claude Desktop**](docs/dsh-vs-claude-desktop.md) - 插件架构深度对比（何时选哪个）
+- [**本地 vs 云端成本追踪**](docs/local-vs-cloud-cost-tracking.md) - Langfuse/LiteLLM对比（12个场景分析）
+- [**为什么需要变异测试**](docs/why-mutation-testing.md) - 31个真实bug的证据
+- [**插件开发最佳实践**](docs/plugin-development-best-practices.md) - 7大原则，避免常见陷阱
+
+---
+
 ## 为什么做这个
 
 官方发行版有 287 个包，但有一批用户能感知的能力是明确缺失的。完整的审计证据见
