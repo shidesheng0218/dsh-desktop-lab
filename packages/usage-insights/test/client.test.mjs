@@ -715,3 +715,82 @@ test('渲染路径只使用主题令牌，不出现字面颜色（成功态与�
     globalThis.fetch = originalFetch;
   }
 });
+
+test('首屏省略 window 参数，让 Host 配置决定默认时间窗', async () => {
+  RUNTIME = createReact();
+  const { module } = instantiate();
+  const ctx = makeCtx({ locale: createFakeLocale() });
+  module.apply(ctx);
+  const [, panel] = ctx.registrations;
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, window: '30d', report: asciiReport({ window: { kind: '30d' } }) }),
+    };
+  };
+
+  try {
+    const tree = await renderReady(panel, propsFor(panel));
+    assert.equal(requests[0].url, '/api/usage-insights');
+    const segmented = expandTree(tree).find((node) => Array.isArray(node.props?.options));
+    assert.equal(segmented.props.value, '30d');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('连续刷新会取消旧请求，旧响应不能覆盖新报告', async () => {
+  RUNTIME = createReact();
+  const { module } = instantiate();
+  const ctx = makeCtx({ locale: createFakeLocale() });
+  module.apply(ctx);
+  const [, panel] = ctx.registrations;
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  const response = (title) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      report: asciiReport({
+        topSessions: [{ ...asciiReport().topSessions[0], title }],
+      }),
+    }),
+  });
+  globalThis.fetch = (url, options) => {
+    if (requests.length === 0) {
+      requests.push({ url, options });
+      return Promise.resolve(response('initial report'));
+    }
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    requests.push({ url, options, resolve });
+    return promise;
+  };
+
+  try {
+    let tree = await renderReady(panel, propsFor(panel));
+    const refresh = expandTree(tree).find((node) => node.props?.title === '重新汇总');
+    refresh.props.onClick();
+    refresh.props.onClick();
+    assert.equal(requests.length, 3);
+    assert.equal(requests[1].options.signal?.aborted, true);
+
+    requests[2].resolve(response('newer report'));
+    await new Promise((resolve) => setImmediate(resolve));
+    requests[1].resolve(response('older report'));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    RUNTIME.beginRender();
+    tree = panel.component(propsFor(panel));
+    const strings = collectStrings(tree).join(' | ');
+    assert.match(strings, /newer report/);
+    assert.doesNotMatch(strings, /older report/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

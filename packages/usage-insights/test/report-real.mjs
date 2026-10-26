@@ -170,7 +170,8 @@ function main() {
     const csv = toCsv(report, table);
     if (typeof options.out === 'string') {
       fs.writeFileSync(options.out, csv);
-      process.stderr.write(`已写入 ${options.out}（${csv.length} 字节，表 ${table}）\n`);
+      const bytes = Buffer.byteLength(csv, 'utf8');
+      process.stderr.write(`已写入 ${options.out}（${bytes} 字节，表 ${table}）\n`);
     } else {
       process.stdout.write(csv);
     }

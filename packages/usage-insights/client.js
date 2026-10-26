@@ -503,16 +503,21 @@ window.__ModuleLoader__.load({
 
     function Panel({ t, locale }) {
       useLocaleRefresh(locale);
-      const [windowKind, setWindowKind] = React.useState('7d');
+      const [windowKind, setWindowKind] = React.useState(null);
       const [state, setState] = React.useState({ status: 'loading' });
+      let activeController;
 
       const load = React.useCallback(
         (kind) => {
-          let cancelled = false;
+          activeController?.abort();
+          const controller = new AbortController();
+          activeController = controller;
           setState({ status: 'loading' });
-          fetch(`${DATA_PATH}?window=${encodeURIComponent(kind)}`, {
+          const suffix = kind === null ? '' : `?window=${encodeURIComponent(kind)}`;
+          fetch(`${DATA_PATH}${suffix}`, {
             credentials: 'same-origin',
             headers: { accept: 'application/json' },
+            signal: controller.signal,
           })
             .then(async (response) => {
               const body = await response.json().catch(() => null);
@@ -520,15 +525,15 @@ window.__ModuleLoader__.load({
               return body;
             })
             .then((data) => {
-              if (!cancelled) setState({ status: 'ready', data });
+              if (activeController === controller) setState({ status: 'ready', data });
             })
             .catch((error) => {
-              if (!cancelled) {
-                setState({ status: 'error', message: String(error.message ?? error) });
-              }
+              if (activeController !== controller || error?.name === 'AbortError') return;
+              setState({ status: 'error', message: String(error.message ?? error) });
             });
           return () => {
-            cancelled = true;
+            if (activeController === controller) activeController = undefined;
+            controller.abort();
           };
         },
         [],
@@ -606,7 +611,7 @@ window.__ModuleLoader__.load({
           },
           h('div', { style: { ...T.base, fontWeight: 600, flex: '1 1 auto' } }, t('panel')),
           h(Segmented, {
-            value: windowKind,
+            value: windowKind ?? state.data?.window ?? '7d',
             onChange: setWindowKind,
             options: [
               { value: '24h', label: t('win24h') },

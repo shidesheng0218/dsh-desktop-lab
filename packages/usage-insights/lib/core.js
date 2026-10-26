@@ -274,7 +274,7 @@ export function aggregate(sessions, options = {}) {
     .sort((a, b) => (a.day < b.day ? -1 : 1))
     .slice(-30);
 
-  const topN = Number.isInteger(options.topN) ? options.topN : 10;
+  const topN = Number.isInteger(options.topN) && options.topN >= 0 ? options.topN : 10;
   const topSessions = sessions
     .filter((session) => session.hasUsage)
     .sort((a, b) => b.tokens.total - a.tokens.total)

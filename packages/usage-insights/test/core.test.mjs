@@ -252,6 +252,11 @@ test('topSessions 只含有效用的会话，按总量降序且受 topN 限制',
   assert.ok(report.topSessions[0].tokens.total >= report.topSessions[1].tokens.total);
 });
 
+test('topN 为负数时回退默认值，而不是从末尾反向截断', () => {
+  const report = aggregate(fixture(), { topN: -1 });
+  assert.deepEqual(report.topSessions.map((session) => session.id), ['s1', 's2', 's3']);
+});
+
 test('没有价目表时成本不可用，且明确给出原因而不是 0 元', () => {
   const report = aggregate(fixture(), { topN: 2 });
   assert.equal(report.cost.available, false);
