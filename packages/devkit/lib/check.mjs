@@ -18,7 +18,7 @@ const ICON_EXTENSIONS = new Set(['.svg', '.png', '.jpg', '.jpeg', '.webp']);
 const ICON_MAX_BYTES = 256 * 1024;
 
 /** 官方文档明令禁止：客户端 bundle 不得把 Harness 客户端包当模块加载。 */
-const FORBIDDEN_CLIENT_REQUIRE = /require\s*\(\s*['"]@deepseek-ai\/dsh-client-[^'"]*['"]\s*\)/;
+const FORBIDDEN_CLIENT_REQUIRE = /(?:\brequire\s*\(\s*|\bimport\s*\(\s*|\bfrom\s*|\bimport\s*)['"]@deepseek-ai\/dsh-client-[^'"]*['"]/;
 
 /**
  * 对 Loader 补丁做结构化检查。
@@ -233,18 +233,21 @@ export function checkPackage(dir) {
           `${relative} 没有调用 window.__ModuleLoader__.load(...)；这是浏览器端唯一的注册入口`,
         );
       }
-      if (manifest.name !== undefined && !text.includes(manifest.name)) {
-        push(
-          'error',
-          'client.id-mismatch',
-          `${relative} 里找不到包名 ${manifest.name}；__ModuleLoader__.load 的 id 必须等于包名`,
-        );
+      if (manifest.name !== undefined) {
+        const factoryId = /__ModuleLoader__\s*\.\s*load\s*\(\s*\{[\s\S]*?\bid\s*:\s*['"]([^'"]+)['"]/.exec(text)?.[1];
+        if (factoryId !== manifest.name) {
+          push(
+            'error',
+            'client.id-mismatch',
+            `${relative} 的工厂 id 是 ${factoryId ?? '缺失'}，但包名是 ${manifest.name}；两者必须一致`,
+          );
+        }
       }
       if (FORBIDDEN_CLIENT_REQUIRE.test(text)) {
         push(
           'error',
           'client.forbidden-require',
-          `${relative} require 了 @deepseek-ai/dsh-client-* 包。官方明确禁止：这些包随时会变，且抛出异常会直接让整个 slot 空白`,
+          `${relative} require/import 了 @deepseek-ai/dsh-client-* 包。官方明确禁止：这些包随时会变，且抛出异常会直接让整个 slot 空白`,
         );
       }
       if (/\bdocument\.body\b/.test(text)) {

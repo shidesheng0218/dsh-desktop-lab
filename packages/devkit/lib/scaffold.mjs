@@ -27,9 +27,29 @@ export function validateNames({ name, panelId, rowId }) {
   return problems;
 }
 
-function substitute(text, tokens) {
+function escapeDoubleQuoted(value) {
+  return JSON.stringify(String(value)).slice(1, -1);
+}
+
+function escapeJsSingleQuoted(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function substitute(text, tokens, filename) {
+  const extension = path.extname(filename);
+  const escape = extension === '.js' || extension === '.mjs'
+    ? escapeJsSingleQuoted
+    : extension === '.json' || extension === '.yml' || extension === '.yaml'
+      ? escapeDoubleQuoted
+      : String;
   return text.replace(/__([A-Z_]+)__/g, (whole, key) =>
-    Object.hasOwn(tokens, key) ? tokens[key] : whole,
+    Object.hasOwn(tokens, key) ? escape(tokens[key]) : whole,
   );
 }
 
@@ -85,7 +105,7 @@ export function scaffold(options) {
         copy(childFrom, childTo);
         continue;
       }
-      const content = substitute(fs.readFileSync(childFrom, 'utf8'), tokens);
+      const content = substitute(fs.readFileSync(childFrom, 'utf8'), tokens, entry.name);
       fs.writeFileSync(childTo, content);
       written.push(path.relative(target, childTo));
     }

@@ -2,5 +2,5 @@
 # 顶层必须是 YAML 数组；insert 里的每一行都需要 id 与 name。
 - insert:
     - id: __ROW_ID__
-      name: '__PACKAGE_NAME__'
+      name: "__PACKAGE_NAME__"
       config: {}

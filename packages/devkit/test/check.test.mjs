@@ -27,10 +27,10 @@ function codes(findings) {
   return findings.map((f) => f.code);
 }
 
-test('模板生成的包必须零错误通过校验', () => {
+test('模板生成的包必须零错误零警告通过校验', () => {
   const dir = makeCleanPackage();
   const { findings, summary } = checkPackage(dir);
-  assert.equal(findings.filter((f) => f.level === 'error').length, 0, JSON.stringify(findings, null, 2));
+  assert.deepEqual(findings, []);
   assert.equal(summary.hasBundle, true);
   assert.equal(summary.hasClient, true);
   assert.equal(summary.dependencies, 0);
@@ -181,3 +181,32 @@ test('统计中文字面量时会跳过注释，避免把中文注释当成文�
   assert.equal(countCjkStringLiterals(withComments), 1);
   assert.equal(countCjkStringLiterals("const a = 'Save';"), 0);
 });
+
+test('scaffold 按上下文转义标题与描述，生成包零错误零警告', () => {
+  const title = 'Alice\'s "Panel"\nBeta';
+  const description = '同时包含 "双引号" 与 \'单引号\'\n下一行';
+  const dir = path.join(makeTempDir(), 'pkg');
+  scaffold({ dir, name: '@local/escaped-panel', title, description });
+
+  let manifest;
+  assert.doesNotThrow(() => {
+    manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+  });
+  assert.equal(manifest.meta.title, title);
+  assert.equal(manifest.meta.description, description);
+  assert.equal(manifest.description, description);
+  assert.deepEqual(checkPackage(dir).findings, []);
+});
+
+for (const [label, statement] of [
+  ['静态 import', "import primitives from '@deepseek-ai/dsh-client-ui-primitives';\n"],
+  ['动态 import', "await import('@deepseek-ai/dsh-client-ui-primitives');\n"],
+  ['re-export', "export { primitives } from '@deepseek-ai/dsh-client-ui-primitives';\n"],
+]) {
+  test(`client bundle 的${label}也会被禁用模块规则抓到`, () => {
+    const dir = makeCleanPackage();
+    fs.appendFileSync(path.join(dir, 'client.js'), `\n${statement}`);
+    const { findings } = checkPackage(dir);
+    assert.ok(codes(findings).includes('client.forbidden-require'), JSON.stringify(findings, null, 2));
+  });
+}

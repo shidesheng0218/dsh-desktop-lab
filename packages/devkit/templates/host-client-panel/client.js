@@ -17,6 +17,48 @@ window.__ModuleLoader__.load({
 
     const PANEL_ID = '__PANEL_ID__';
     const DATA_PATH = '/api/__PANEL_ID__';
+    const NS = '__PACKAGE_NAME__/panel';
+    const DICT = {
+      zh: {
+        panel: '__TITLE__',
+        loading: '加载中…',
+        error: '取数失败：{message}',
+      },
+      en: {
+        panel: '__TITLE__',
+        loading: 'Loading…',
+        error: 'Failed to load: {message}',
+      },
+    };
+
+    function interpolate(template, params) {
+      if (params === undefined) return template;
+      return template.replace(/\{(\w+)\}/g, (match, name) =>
+        name in params ? String(params[name]) : match,
+      );
+    }
+
+    function setupTranslator(ctx) {
+      const locale = typeof ctx.get === 'function' ? ctx.get('locale') : ctx.locale;
+      if (locale === undefined || typeof locale.bind !== 'function') {
+        return {
+          t: (key, params) => interpolate(DICT.zh[key] ?? key, params),
+          locale: undefined,
+        };
+      }
+      if (typeof locale.register === 'function') {
+        ctx.effect(() => locale.register(NS, DICT), 'scaffold: dictionaries');
+      }
+      return { t: locale.bind(NS), locale };
+    }
+
+    function useLocaleRefresh(locale) {
+      const [, bump] = React.useState(0);
+      React.useEffect(() => {
+        if (locale === undefined || typeof locale.subscribe !== 'function') return undefined;
+        return locale.subscribe(() => bump((value) => value + 1));
+      }, [locale]);
+    }
 
     function Icon({ size = 16 }) {
       return h(
@@ -29,6 +71,7 @@ window.__ModuleLoader__.load({
           stroke: 'currentColor',
           strokeWidth: 1.7,
           strokeLinecap: 'round',
+          strokeLinejoin: 'round',
           'aria-hidden': true,
           style: { display: 'block' },
         },
@@ -40,7 +83,8 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function Page() {
+    function Page({ t, locale }) {
+      useLocaleRefresh(locale);
       const [state, setState] = React.useState({ status: 'loading' });
 
       React.useEffect(() => {
@@ -62,24 +106,24 @@ window.__ModuleLoader__.load({
       }, []);
 
       const themes = {
-        color: 'var(--dsw-alias-text-primary, inherit)',
-        background: 'var(--dsw-alias-background-primary, transparent)',
+        color: 'var(--dsw-alias-label-primary, inherit)',
+        background: 'var(--dsw-alias-bg-base, transparent)',
       };
 
       if (state.status === 'loading') {
-        return h('div', { style: { padding: 16, fontSize: 13, ...themes } }, '加载中…');
+        return h('div', { style: { padding: 16, fontSize: 13, ...themes } }, t('loading'));
       }
       if (state.status === 'error') {
         return h(
           'div',
           { style: { padding: 16, fontSize: 13, ...themes } },
-          `取数失败：${state.message}`,
+          t('error', { message: state.message }),
         );
       }
       return h(
         'div',
         { style: { padding: 16, fontSize: 13, ...themes } },
-        h('div', { style: { fontWeight: 600, marginBottom: 8 } }, '__TITLE__'),
+        h('div', { style: { fontWeight: 600, marginBottom: 8 } }, t('panel')),
         h('pre', { style: { whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 } },
           JSON.stringify(state.data, null, 2)),
       );
@@ -89,19 +133,25 @@ window.__ModuleLoader__.load({
       // inject 声明本半边依赖 slots 服务；缺它就保持未激活。
       inject: ['slots'],
       apply(ctx) {
+        const { t, locale } = setupTranslator(ctx);
+        const panelProps = { t, locale };
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
             {
               name: 'sidebar.panellist',
               id: PANEL_ID,
               order: 30,
-              label: () => '__TITLE__',
+              locale: NS,
+              label: () => t('panel'),
             },
             Icon,
           ),
         );
         ctx.slots.inject('main', () =>
-          ctx.slots.register({ name: 'main', key: PANEL_ID }, Page),
+          ctx.slots.register(
+            { name: 'main', key: PANEL_ID, locale: NS, inject: () => panelProps },
+            Page,
+          ),
         );
       },
     };
