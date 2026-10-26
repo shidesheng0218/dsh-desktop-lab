@@ -4,3 +4,6 @@ node_modules/
 
 # devkit 从 app.asar 抽出的官方文档缓存（体积大、可随时重建）
 .cache/
+
+# 隔离开发工作区
+.worktrees/
