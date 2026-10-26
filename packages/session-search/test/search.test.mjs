@@ -159,6 +159,20 @@ test('中文与 emoji 混排时同样不切碎', () => {
   assert.ok(snippet.includes('🎯'));
 });
 
+test('官方允许空白灵活匹配时，摘要仍定位到实际命中', () => {
+  const text = `${'前'.repeat(260)}foo   bar${'后'.repeat(40)}`;
+  const snippet = makeSnippet(text, 'foo bar', 80);
+  assert.ok(snippet.includes('foo   bar'), '官方已命中，摘要却不能退回无关开头');
+});
+
+test('查询本身超过摘要上限时仍按码点截断', () => {
+  const query = '😀'.repeat(100);
+  const text = `${'前'.repeat(40)}${query}${'后'.repeat(40)}`;
+  const snippet = makeSnippet(text, query, 20);
+  assert.ok([...snippet.replace(/…/g, '')].length <= 20);
+  assert.ok(!hasLoneSurrogate(snippet));
+});
+
 /* ------------------------------------------------------------ 结果装配 */
 
 function hit(overrides = {}) {
@@ -217,7 +231,7 @@ test('候选被截断时 note 明确提示可以用 cwd/days/session_id 收窄',
   assert.match(result.notes, /cwd/);
 });
 
-test('单会话命中过多时如实说明，并指出可用 session_id 看全', () => {
+test('单会话命中过多时如实说明，并指出可用 session_id 收窄', () => {
   const result = assembleResult([hit()], { scanned: { cappedSessions: 2 } });
   assert.match(result.notes, /more than 5 matches/);
   assert.match(result.notes, /session_id/);

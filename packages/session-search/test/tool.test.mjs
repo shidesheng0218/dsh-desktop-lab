@@ -147,8 +147,9 @@ test('注册的工具名、描述与「字面量、非语义」的说明都在',
   assert.equal(tool.name, 'search_past_sessions');
   assert.match(tool.description, /literal/i);
   assert.match(tool.description, /not semantic/i);
+  assert.match(tool.description, /untrusted historical data/i);
   // 描述常驻模型上下文，必须短
-  assert.ok(tool.description.length < 400, `描述 ${tool.description.length} 字符，过长`);
+  assert.ok(tool.description.length < 500, `描述 ${tool.description.length} 字符，过长`);
 });
 
 test('tools.register() 要求的 output.render 是函数（否则注册直接抛 TypeError）', () => {
@@ -254,6 +255,9 @@ test('config 可以覆盖每会话与候选上限', async () => {
   assert.equal(value.hits.length, 2);
   assert.equal(value.scanned.candidate_sessions, 1);
   assert.equal(value.scanned.capped_sessions, 1);
+  assert.match(value.notes, /more than 2 matches/);
+  assert.match(value.notes, /narrow the scan to one session/);
+  assert.doesNotMatch(value.notes, /in full/);
 });
 
 test('limit 控制返回条数，多余部分在 note 里说明', async () => {
@@ -353,6 +357,48 @@ test('取消信号已被触发时抛错，尊重调用方取消', async () => {
   await assert.rejects(() => tool.execute({ query: 'x' }, { signal: controller.signal }));
 });
 
+test('filterEvents 返回期间发生取消时不得继续装配结果', async () => {
+  const ctx = makeCtx({ headers: headersFixture().slice(0, 1), documents: { 's-new': [document(1, 'hit')] } });
+  const controller = new AbortController();
+  ctx.sessionQuery.filterEvents = async () => {
+    controller.abort(new Error('stop after filter'));
+    return [document(1, 'hit')];
+  };
+  apply(ctx, {});
+  await assert.rejects(
+    () => ctx.registrations[0].execute({ query: 'hit' }, { signal: controller.signal }),
+    /stop after filter/,
+  );
+});
+
+test('filterEvents 抛出的取消不得按损坏日志吞掉', async () => {
+  const ctx = makeCtx({ headers: headersFixture().slice(0, 1), documents: { 's-new': [document(1, 'hit')] } });
+  const controller = new AbortController();
+  ctx.sessionQuery.filterEvents = async () => {
+    controller.abort(new Error('stop inside filter'));
+    throw controller.signal.reason;
+  };
+  apply(ctx, {});
+  await assert.rejects(
+    () => ctx.registrations[0].execute({ query: 'hit' }, { signal: controller.signal }),
+    /stop inside filter/,
+  );
+});
+
+test('标题回填期间发生取消时必须抛错而不是正常返回', async () => {
+  const ctx = makeCtx({ headers: headersFixture(), documents: { 's-new': [document(1, 'hit')] } });
+  const controller = new AbortController();
+  ctx.sessionQuery.readTitleSnapshots = async () => {
+    controller.abort(new Error('stop during titles'));
+    throw controller.signal.reason;
+  };
+  apply(ctx, {});
+  await assert.rejects(
+    () => ctx.registrations[0].execute({ query: 'hit' }, { signal: controller.signal }),
+    /stop during titles/,
+  );
+});
+
 test('output.render 产出可读文本，含命中数与说明', async () => {
   const { tool } = setup({
     headers: headersFixture(),
@@ -366,6 +412,7 @@ test('output.render 产出可读文本，含命中数与说明', async () => {
   assert.match(blocks[0].text, /1 matching excerpt/);
   assert.match(blocks[0].text, /hello app\.asar world/);
   assert.match(blocks[0].text, /Scanned/);
+  assert.match(blocks[0].text, /untrusted historical data/i);
 });
 
 test('execute 返回值全部是可无损 JSON 序列化的（不含 undefined/NaN）', async () => {

@@ -88,27 +88,36 @@ export function makeSnippet(text, query, max = LIMITS.MAX_SNIPPET_CHARS) {
   const points = [...source];
   if (points.length === 0) return '';
 
-  const needle = typeof query === 'string' ? query : '';
-  const at = needle.length === 0 ? -1 : source.toLowerCase().indexOf(needle.toLowerCase());
+  const needle = (typeof query === 'string' ? query : '').trim();
+  const pattern = needle.length === 0
+    ? null
+    : new RegExp(
+        needle
+          .split(/\s+/u)
+          .map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'))
+          .join('\\s+'),
+        'iu',
+      );
+  const match = pattern?.exec(source) ?? null;
 
-  if (at === -1) {
+  if (match === null) {
     // 没定位到（理论上不该发生：官方已判定命中）时退回开头截断，
     // 而不是返回空串——空摘要会让人以为「命中了但没内容」。
     return points.length <= max ? source : `${points.slice(0, max).join('')}…`;
   }
 
   // 把 UTF-16 下标换算成码点下标，后续切割统一按码点走。
-  const matchPoint = [...source.slice(0, at)].length;
-  const matchLength = [...needle].length;
-  const matchEnd = matchPoint + matchLength;
+  const matchPoint = [...source.slice(0, match.index)].length;
+  const matchLength = [...match[0]].length;
 
   if (points.length <= max) return source;
 
-  // 让关键词尽量居中，再夹到有效范围内。
-  let start = Math.max(0, matchPoint - Math.floor((max - matchLength) / 2));
-  let end = Math.min(points.length, start + max);
-  start = Math.max(0, end - max);
-  end = Math.min(points.length, Math.max(end, matchEnd));
+  // 长查询只保留其开头 max 个码点；普通查询尽量居中并保证完整命中。
+  let start = matchLength >= max
+    ? matchPoint
+    : Math.max(0, matchPoint - Math.floor((max - matchLength) / 2));
+  start = Math.min(start, points.length - max);
+  const end = start + max;
 
   const head = start > 0 ? '…' : '';
   const tail = end < points.length ? '…' : '';
@@ -122,12 +131,15 @@ export function makeSnippet(text, query, max = LIMITS.MAX_SNIPPET_CHARS) {
  * 先找回什么时候聊过，再顺着当时的顺序看下去。
  *
  * @param {object[]} hits 原始命中
- * @param {{limit?:number, scanned?:object, truncated?:boolean, skipped?:object[]}} options
+ * @param {{limit?:number, maxHitsPerSession?:number, scanned?:object, truncated?:boolean, skipped?:object[]}} options
  */
 export function assembleResult(hits, options = {}) {
   const limit = Number.isInteger(options.limit) && options.limit > 0
     ? Math.min(options.limit, LIMITS.MAX_HITS)
     : LIMITS.DEFAULT_LIMIT;
+  const maxHitsPerSession = Number.isInteger(options.maxHitsPerSession) && options.maxHitsPerSession > 0
+    ? options.maxHitsPerSession
+    : LIMITS.MAX_HITS_PER_SESSION;
 
   const sorted = [...hits].sort((a, b) => {
     if (b.createdAt !== a.createdAt) return (b.createdAt ?? 0) - (a.createdAt ?? 0);
@@ -155,8 +167,8 @@ export function assembleResult(hits, options = {}) {
   }
   if (scanned.cappedSessions > 0) {
     notes.push(
-      `${scanned.cappedSessions} session(s) had more than ${LIMITS.MAX_HITS_PER_SESSION} matches; ` +
-        'only the first few from each are listed. Use `session_id` to see one session in full.',
+      `${scanned.cappedSessions} session(s) had more than ${maxHitsPerSession} matches; ` +
+        'only the first few from each are listed. Use `session_id` to narrow the scan to one session.',
     );
   }
   if (options.truncated === true) {
