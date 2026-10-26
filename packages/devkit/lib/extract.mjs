@@ -29,9 +29,49 @@ function listPackages(source, root) {
   return packages;
 }
 
-function writeFile(target, buffer) {
+function writeFile(target, buffer, force = false) {
+  if (!force && fs.existsSync(target) && fs.readFileSync(target).equals(buffer)) return false;
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, buffer);
+  return true;
+}
+
+function reconcileDocs(dir, wanted) {
+  if (!fs.existsSync(dir)) return;
+  const keep = new Set(wanted);
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isFile() && /^README(\.zh)?\.md$/.test(entry.name) && !keep.has(entry.name)) {
+      fs.rmSync(path.join(dir, entry.name));
+    }
+  }
+}
+
+function reconcileSource(dir, wanted) {
+  const lib = path.join(dir, 'lib');
+  if (!fs.existsSync(lib)) return;
+  const keep = new Set(wanted);
+  function walk(current, prefix) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const relative = `${prefix}${entry.name}`;
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full, `${relative}/`);
+      else if (/^lib\/.*\.(js|mjs|cjs|json)$/.test(relative) && !keep.has(relative)) {
+        fs.rmSync(full);
+      }
+    }
+  }
+  walk(lib, 'lib/');
+}
+
+function documentationRoots(out) {
+  const index = path.join(out, 'INDEX.txt');
+  if (!fs.existsSync(index)) return [out];
+  const packages = fs.readFileSync(index, 'utf8').split('\n').filter(
+    (pkg) => pkg !== '' && pkg !== '.' && pkg !== '..' && !pkg.includes('/') && !pkg.includes('\\'),
+  );
+  return packages
+    .map((pkg) => path.join(out, pkg))
+    .filter((dir) => fs.existsSync(dir) && fs.statSync(dir).isDirectory());
 }
 
 /**
@@ -54,15 +94,14 @@ export function extractDocs({ app, out, force = false, filter }) {
     for (const [pkg, entries] of [...packages].sort()) {
       if (filter !== undefined && !pkg.includes(filter)) continue;
       const wanted = entries.filter((e) => /^README(\.zh)?\.md$/.test(e));
+      reconcileDocs(path.join(out, pkg), wanted);
       if (wanted.length === 0) continue;
       count += 1;
       for (const relative of wanted) {
         const target = path.join(out, pkg, relative);
-        if (!force && fs.existsSync(target)) continue;
         const buffer = source.read(`${root}@deepseek-ai/${pkg}/${relative}`);
         if (buffer === null) continue;
-        writeFile(target, buffer);
-        files += 1;
+        if (writeFile(target, buffer, force)) files += 1;
       }
     }
 
@@ -99,13 +138,12 @@ export function extractSource({ app, out, packages, force = false }) {
       const wanted = entries.filter(
         (e) => e === 'package.json' || /^lib\/.*\.(js|mjs|cjs|json)$/.test(e),
       );
+      reconcileSource(path.join(out, pkg), wanted);
       for (const relative of wanted) {
         const target = path.join(out, pkg, relative);
-        if (!force && fs.existsSync(target)) continue;
         const buffer = source.read(`${root}@deepseek-ai/${pkg}/${relative}`);
         if (buffer === null) continue;
-        writeFile(target, buffer);
-        files += 1;
+        if (writeFile(target, buffer, force)) files += 1;
       }
     }
 
@@ -121,7 +159,7 @@ export function extractSource({ app, out, packages, force = false }) {
 export function searchDocs({ out, term, limit = 40 }) {
   const hits = [];
   const needle = term.toLowerCase();
-  const stack = [out];
+  const stack = documentationRoots(out);
   while (stack.length > 0 && hits.length < limit) {
     const current = stack.pop();
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
