@@ -231,6 +231,34 @@ test('守恒：按天求和等于总计，且与工作区口径一致', () => {
   assert.equal(byDay, report.totals.tokens.total);
 });
 
+test('byDay 只保留最近 30 个创建日，但不影响工作区与总计', () => {
+  const sessions = Array.from({ length: 31 }, (_, index) =>
+    normalizeSession({
+      header: header({
+        id: `day-${index + 1}`,
+        createdAt: Date.UTC(2026, 0, index + 1),
+        cwd: '/Users/example/alpha',
+      }),
+      values: values({
+        tokenUsage: {
+          totals: {
+            uncachedInputTokens: index + 1,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+        },
+      }),
+    }),
+  );
+  const report = aggregate(sessions, { now: Date.UTC(2026, 11, 31) });
+  assert.equal(report.byDay.length, 30);
+  assert.equal(report.byDay[0].day, '2026-01-02');
+  assert.equal(report.byDay.reduce((sum, day) => sum + day.tokens.total, 0), 495);
+  assert.equal(report.byWorkspace.reduce((sum, workspace) => sum + workspace.tokens.total, 0), 496);
+  assert.equal(report.totals.tokens.total, 496);
+});
+
 test('零用量会话计入会话数，但不计入有用量会话数', () => {
   const report = aggregate(fixture(), { topN: 2 });
   assert.equal(report.totals.sessions, 4);

@@ -254,11 +254,31 @@ function loadRealRecords() {
   return sessions;
 }
 
-const realRecords = loadRealRecords();
+const realRecords = process.env.DSH_RUN_REAL_TESTS === '1' ? loadRealRecords() : [];
+const skipReal = realRecords.length === 0
+  ? '需要 DSH_RUN_REAL_TESTS=1 且本机投影缓存非空'
+  : false;
+
+function realTokenTotal(entry) {
+  const totals = entry.values?.tokenUsage?.totals ?? {};
+  return (
+    (totals.uncachedInputTokens ?? 0) +
+    (totals.outputTokens ?? 0) +
+    (totals.cacheReadTokens ?? 0) +
+    (totals.cacheWriteTokens ?? 0)
+  );
+}
+
+function creationDay(ms) {
+  const date = new Date(ms);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
 
 test(
   '用本机真实投影缓存跑通 Host 链路，并与 report-real 的口径一致',
-  { skip: realRecords.length === 0 ? '本机投影缓存为空，跳过真实数据交叉验证' : false },
+  { skip: skipReal },
   async () => {
     const ctx = makeCtx(
       realRecords.map((entry) => ({
@@ -281,30 +301,30 @@ test(
     const body = await response.json();
 
     // 逐条独立重算：真实数据上不允许出现 NaN / undefined。
-    let expectedTotal = 0;
-    for (const entry of realRecords) {
-      const totals = entry.values?.tokenUsage?.totals ?? {};
-      expectedTotal +=
-        (totals.uncachedInputTokens ?? 0) +
-        (totals.outputTokens ?? 0) +
-        (totals.cacheReadTokens ?? 0) +
-        (totals.cacheWriteTokens ?? 0);
-    }
+    const expectedTotal = realRecords.reduce((sum, entry) => sum + realTokenTotal(entry), 0);
+    const retainedDays = new Set(
+      [...new Set(realRecords.map((entry) => creationDay(entry.header.createdAt)))]
+        .sort()
+        .slice(-30),
+    );
+    const expectedDailyTotal = realRecords
+      .filter((entry) => retainedDays.has(creationDay(entry.header.createdAt)))
+      .reduce((sum, entry) => sum + realTokenTotal(entry), 0);
 
     assert.equal(body.report.totals.sessions, realRecords.length);
     assert.equal(body.report.totals.tokens.total, expectedTotal);
     assert.ok(Number.isFinite(body.report.totals.tokens.total));
-    // 守恒：按天与按工作区求和必须等于总计
+    // byDay 遵循最近 30 个创建日的契约；工作区始终与总计守恒。
     const byDay = body.report.byDay.reduce((acc, d) => acc + d.tokens.total, 0);
     const byWorkspace = body.report.byWorkspace.reduce((acc, w) => acc + w.tokens.total, 0);
-    assert.equal(byDay, expectedTotal);
+    assert.equal(byDay, expectedDailyTotal);
     assert.equal(byWorkspace, expectedTotal);
   },
 );
 
 test(
   '真实数据的 JSON 响应可以无损序列化（不含 undefined / NaN）',
-  { skip: realRecords.length === 0 ? '本机投影缓存为空' : false },
+  { skip: skipReal },
   async () => {
     const ctx = makeCtx(
       realRecords.map((entry) => ({ header: entry.header, live: false })),
