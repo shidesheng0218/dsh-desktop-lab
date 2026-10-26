@@ -1,6 +1,6 @@
 # DSH Desktop Lab
 
-为 **DeepSeek Harness 桌面版**（`@deepseek-ai/dsh-desktop` 0.2.0-rc.2）开发插件的项目。
+为 **DeepSeek Harness 桌面版**开发插件的项目。完整 API 审计基线是 `@deepseek-ai/dsh-desktop` **0.2.0-rc.2**；另已核对 0.2.1-rc.2 的关键入口，但这不等于完成真实 GUI 或运行时兼容验证。
 
 包含三件东西：
 
@@ -8,7 +8,7 @@
 |---|---|
 | [`packages/devkit`](packages/devkit) | 工具链：抽取 `app.asar` 里的官方文档与源码、生成插件骨架、装机前静态校验 |
 | [`packages/usage-insights`](packages/usage-insights) | 插件：**跨会话用量与成本面板**，挂在桌面版左侧栏；附 JSON/CSV 导出 |
-| [`packages/session-search`](packages/session-search) | 插件：给模型一个**检索自己过去会话**的工具 `search_past_sessions`（纯 Host，无界面） |
+| [`packages/session-search`](packages/session-search) | 插件：给模型一个**检索自己过去会话**的工具 `search_past_sessions`（纯 Host，无界面；0.2.1+ 维护模式） |
 
 三个包互相独立，可以只装其中一个。
 
@@ -17,19 +17,19 @@
 ## 🏆 项目亮点
 
 ### 工程质量保证
-- ✅ **146个测试用例** - usage-insights 81个 + session-search 49个 + devkit 16个
+- ✅ **163个测试用例** - usage-insights 86个 + session-search 54个 + devkit 23个
 - ✅ **31处变异测试** - 注入真实bug，100%被捕获，证明测试有效
 - ✅ **契约化导出** - JSON schemaVersion=1，CSV带BOM+公式注入防护
 - ✅ **API逐一核对** - 从官方已构建源码验证，不是猜的
 
 ### 技术深度
 - 📚 **25,000字技术文档** - 架构对比、最佳实践、变异测试证据
-- 🔍 **287包深度审计** - 识别14个可补足的能力缺口
-- 🛠️ **完整工具链** - asar提取 + 16条静态检查
+- 🔍 **287包深度审计** - 识别14个可补足的能力缺口（0.2.0-rc.2 基线）
+- 🛠️ **完整工具链** - asar提取 + 静态检查
 
 ### 差异化价值
-- 🔒 **本地优先** - 零数据上传，完全离线可用
-- 📊 **永不漂移** - 面板与导出共用同一份代码
+- 🔒 **本地计算** - 聚合与检索在本机执行；模型侧传输边界见各包安全说明
+- 📊 **同源计算** - 面板与导出共用同一个报告构建器
 - 🌍 **多平台路线** - Phase 2支持Claude Desktop + Cursor
 
 ### 📖 深度阅读
@@ -131,23 +131,28 @@ Plugins 页面找到本插件、编辑它的 config 行：
 
 ### 4. 历史会话检索（`session-search`）
 
+> **版本选择**：DSH 0.2.1+ 已提供官方 **Session search**，含工作区授权、FTS5 排名、
+> 分页、事件读取和超时控制；需要这些能力时请优先启用官方 bundle。本插件转为维护模式，
+> 只保留给需要无索引、任意子串扫描的场景。它默认不按调用者工作区做授权，可能读取
+> 其他工作区，结果也会返回给模型；使用前请阅读 [`packages/session-search/SECURITY.md`](packages/session-search/SECURITY.md)。
+
 装法同上，把路径换成 `packages/session-search`。它是**纯 Host 插件、没有界面**——
 装好之后模型就多了一个工具 `search_past_sessions`，可以按字面量检索本机历史会话：
 
 ```
-query        必填。要查找的字面量（大小写不敏感，不是正则）
+query        必填。要查找的字面量（大小写不敏感、连续空白灵活匹配；不是正则或语义搜索）
 limit        返回条数上限，默认 10，封顶 50
-cwd          只搜某个工作区（精确匹配）
+cwd          只搜某个工作区（精确匹配；不显式提供时不限制范围）
 session_id   只搜某一个会话
 days         只搜最近 N 天创建的会话
 ```
 
 返回值里每条命中带会话 id、标题、工作区、时间、事件序号和**带上下文的片段**，
-外加 `notes` 说明本次扫描了多少、是否有截断。
+外加 `notes` 说明本次扫描了多少、是否有截断。历史片段按不可信数据处理，不是新指令。
 
-**为什么做这个**：官方 `dsh-session-query` 的 Dev Note 指向 `../tool-session-query/`，
-但**该包不在 287 个官方包里**——会话历史有完整的查询服务，却没有模型可调用的入口。
-这是官方自己留的空位。
+**为什么做这个**：在 0.2.0-rc.2 审计基线中，官方 `dsh-session-query` 的 Dev Note 指向
+`../tool-session-query/`，但该包不在当时的 287 个官方包里。0.2.1 已补上这个空位，
+所以新项目应优先评估官方实现，而不是继续叠加一套平行工具。
 
 **关键约束（决定它会不会拖慢你）**：官方 `filterEvents()` 内部会**读整个会话日志**，
 所以候选会话数必须封顶。默认最多扫 40 个会话、每会话最多取 5 条命中，
@@ -189,7 +194,7 @@ dsh-devkit source dsh-session-query dsh-session-projection-cache dsh-client-ui-t
 `check` 覆盖的规则（每条都有对应的失败用例，见 [`packages/devkit/test`](packages/devkit/test)）：
 缺 `dsh.bundle.patch`、patch 顶层不是数组、补丁行缺 `name`、YAML 用制表符缩进、
 `exports["./client"]` 缺失、client bundle 没调 `__ModuleLoader__`、工厂 id 与包名不一致、
-client bundle `require` 了 `@deepseek-ai/dsh-client-*`（官方明令禁止）、JS 语法错误、
+client bundle `require/import` 了 `@deepseek-ai/dsh-client-*`（官方明令禁止）、JS 语法错误、
 locale 键不一致、图标越界或缺失、声明了运行时依赖、
 **client bundle 有中文文案却没注册 locale**（启发式，见下）。
 
@@ -209,12 +214,12 @@ packages/usage-insights/
 ├── lib/export.js       CSV/JSON 序列化（含公式注入防护与 BOM）
 ├── lib/pricing.js      价目表与成本估算
 ├── client.js           Client 半边：左侧栏图标 + 面板（React，无构建步骤，zh/en 双语）
-└── test/               81 个用例
+└── test/               86 个用例
 
 packages/session-search/
 ├── index.js            纯 Host：手写工具定义并注册（不 import 任何官方包）
 ├── lib/search.js       纯逻辑：候选筛选 / 摘要截取 / 结果装配（无 DSH 依赖）
-└── test/               49 个用例
+└── test/               54 个用例
 ```
 
 取数链路（每一处 API 都从官方**已构建源码**核对，不是照 README 猜的）：
@@ -242,9 +247,9 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 
 **已验证：**
 
-- `packages/devkit/test` 16 个用例，含 14 个刻意构造的坏包/坏 bundle，全部被正确报出
-- `packages/usage-insights/test` 81 个用例：聚合核心 25、Host 集成 23、Client 契约 14、导出契约 19
-- `packages/session-search/test` 49 个用例：纯逻辑 26（候选截断/Unicode 边界/排序）、工具注册与执行 23
+- `packages/devkit/test` 23 个用例：校验器 20、文档与源码提取 3
+- `packages/usage-insights/test` 86 个用例：聚合核心 27、Host 集成 23、Client 契约 16、导出契约 19、真实 CLI 1
+- `packages/session-search/test` 54 个用例：纯逻辑 28（候选截断/Unicode 边界/排序）、工具注册与执行 26
 - **变异测试**：先后注入 23 个真实缺陷（按天重复累加、命中率分母用错、面板 key 不一致、
   字面颜色、成本退化 0 元、金额措辞丢失、时间窗只筛不标注、en 词典缺键、
   en 值写成中文、绕开 `t()` 硬编码、词典注册脱离 `ctx.effect`、
@@ -260,7 +265,7 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
   整个插件加载失败，而官方 Schema 子集里**没有** `minimum`/`maximum`/`maxLength`。
 - **导出契约**：键集冻结测试锁死 JSON 形状；CSV 校验原始字节里的 BOM、
   RFC 4180 转义、公式注入防护（且不误伤负数）；route 层校验 400 而非静默回退
-- **真实数据交叉验证**：Host 链路跑在本机真实投影缓存上，与独立重算的结果逐位一致
+- **真实数据交叉验证**：`npm run test:real` 显式读取本机真实投影缓存，喂给模拟 Host 后与独立重算逐位一致；这不是实际 DSH Loader 的端到端测试
 - Client 半边在模拟浏览器环境里真正执行过，加载态/成功态/失败态都渲染出内容
 - **locale 接线完整性**：英文渲染下断言「结果里不得出现任何中日韩字符」，
   另加两种语言键集一致、缺 locale 服务时不显示原始键名三条互相独立
@@ -275,7 +280,7 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
   面板在真实 React 下的外观、模型是否真能调通 `search_past_sessions`——
   都还没有被观察过，需要你装一次确认。
 - **`session-search` 没有在真实会话历史上跑过端到端。** 它的候选筛选、摘要截取、
-  截断语义、注册形状都有测试覆盖（49 个用例、8 处变异全部被捕获），
+  截断语义、注册形状都有测试覆盖（54 个用例、8 处变异全部被捕获），
   但「真实日志喂进官方 `filterEvents` 会返回什么」只在假上下文里验证过，
   磁盘上真实的 zstd 多帧日志路径没有被这条链路跑通。**第一次使用时请留意耗时**：
   默认最多扫 40 个会话，若明显卡顿就把 `maxCandidateSessions` 调小。
@@ -293,7 +298,7 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 
 - **时间窗按「会话创建时间」筛选**，不是最后活动时间。官方投影缓存里没有可靠的最后活动字段。
 - **金额按单条价目表折算**，无法按模型分别计价——投影缓存的 `tokenUsage` 只有四个 token 桶，不含路由/模型。
-- **数据与最后一次 checkpoint 一样旧**（官方 write-behind 是 200 事件 / 5 秒一次），但永不会错。
+- **数据与最后一次 checkpoint 一样旧**（官方 write-behind 是 200 事件 / 5 秒一次），可能滞后；缓存缺失或损坏时仍须结合 coverage 与实际日志排查。
 - **界面文案只有 zh / en 两种**。官方的 locale 回退链必须终止于 `en`，所以新增第三种语言要另外提供
   一份词典并声明回退链；当前词典写在 `client.js` 里（无构建步骤，不能 import JSON），
   `locale/*.json` 另有用处 —— 它们是宿主机读取的**插件卡片展示元数据**，与界面文案是两回事。
@@ -302,15 +307,16 @@ ctx.slots.register({ name: 'main', key: 'usage-insights' }, Panel)   // key 必�
 
 ## 路线图
 
+- 按事件实际发生时间统计趋势，并升级报告契约（当前按会话创建日聚合）
 - 按模型分别计价：读会话日志里的 `request/header` 拿路由，代价是放弃零 I/O
 - 成本预算告警：接 `shell.quota-notice` chain
-- 历史趋势与导出（CSV / JSON）
 
 ## 开发
 
 ```bash
-npm test        # 146 个用例
-npm run check   # 插件包静态校验
-npm run docs    # 重建官方文档缓存
-npm run real    # 真实数据报告
+npm test          # 163 个用例：默认 161 个通过，2 个真实缓存用例跳过
+npm run test:real # 显式读取本机缓存，执行真实数据 + 模拟 Host 交叉验证
+npm run check     # 插件包静态校验
+npm run docs      # 刷新官方文档缓存并清理过期生成文件
+npm run real      # 真实数据报告
 ```

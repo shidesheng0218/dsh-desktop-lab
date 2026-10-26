@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-27
+
+### Fixed
+
+#### usage-insights
+- 面板首屏不再用硬编码 `7d` 覆盖 Host 的 `config.window`；显式选择仍覆盖默认值
+- 连续刷新会取消旧请求，旧响应不能覆盖较新的报告
+- 负数 `topN` 回退默认值，不再从数组末尾反向截断
+- CSV 文件大小按真实 UTF-8 字节数报告
+- 真实缓存测试覆盖 30 个创建日截断契约，默认测试不再读取个人 `~/.dsh`
+
+#### session-search
+- 摘要定位与官方空白灵活的字面量匹配保持一致，并限制超长查询的摘要长度
+- `filterEvents` 与标题回填期间的取消不再被吞掉或延迟到后续会话才生效
+- 截断说明使用实际 `maxHitsPerSession`，不再固定写成 5 或承诺可看全部结果
+- 工具描述与输出明确历史片段是不可信数据，不是指令
+
+#### devkit
+- `docs` / `source` 默认刷新变化内容，并清理解包范围内已经删除的生成文件
+- 文档搜索只遍历当前 `INDEX.txt` 中的包，避免返回旧版已删除包的缓存
+- 脚手架按 JSON、JavaScript、YAML 上下文转义标题和描述；模板自身提供双语注册并达到零警告
+- 客户端禁用模块检查覆盖 `require`、静态/动态 `import` 和 re-export
+- 工厂 id 校验读取真实模块 id，不再被文件中其他同名字符串误导
+
+### Added
+
+- GitHub Actions：Node 22.15 与 24 上运行默认测试和插件静态检查
+- `npm run test:real`：显式启用本机真实缓存的 Host 交叉验证
+- MIT LICENSE 与各包 license 元数据
+- 共 163 个测试用例；默认运行 161 个，另 2 个真实缓存用例按需启用
+
+### Changed
+
+- DSH 0.2.1+ 推荐优先使用官方 **Session search**；本插件转为维护模式，保留给需要无索引子串扫描的场景
+- 安全文档明确敏感元数据、跨工作区读取、模型提供商传输和不可信历史内容边界
+
 ## [0.1.0] - 2026-10-05
 
 ### Added

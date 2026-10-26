@@ -1,6 +1,7 @@
 {
   "name": "@local/dsh-devkit",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "为 DeepSeek Harness 桌面版开发插件的工具链：抽取 app.asar 里的官方文档与源码、生成插件骨架、装机前静态校验。",

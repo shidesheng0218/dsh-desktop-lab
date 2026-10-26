@@ -1,6 +1,7 @@
 {
   "name": "dsh-desktop-lab",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "为 DeepSeek Harness 桌面版服务的插件项目：devkit 工具链 + usage-insights 跨会话用量与成本面板 + session-search 历史检索工具",

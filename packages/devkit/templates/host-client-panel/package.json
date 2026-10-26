@@ -1,6 +1,7 @@
 {
   "name": "__PACKAGE_NAME__",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "__DESCRIPTION__",

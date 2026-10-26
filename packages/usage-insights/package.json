@@ -1,6 +1,7 @@
 {
   "name": "@local/dsh-usage-insights",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "跨会话用量与成本面板：把 DSH 桌面版所有会话的 token、缓存命中率、耗时与估算成本折叠成一页。",

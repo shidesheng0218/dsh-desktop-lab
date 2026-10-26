@@ -1,9 +1,10 @@
 {
   "name": "@local/dsh-session-search",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "license": "MIT",
   "private": true,
   "type": "module",
-  "description": "给模型一个检索自己过去会话的工具：官方会话查询服务有完整能力，却没有模型可调用的入口。",
+  "description": "维护模式的历史会话字面量检索工具；DSH 0.2.1+ 建议优先使用官方 Session search。",
   "exports": {
     ".": "./index.js",
     "./package.json": "./package.json",
