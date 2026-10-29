@@ -505,13 +505,15 @@ window.__ModuleLoader__.load({
       useLocaleRefresh(locale);
       const [windowKind, setWindowKind] = React.useState(null);
       const [state, setState] = React.useState({ status: 'loading' });
-      let activeController;
+      const activeController = React.useRef(null);
+      const requestSerial = React.useRef(0);
 
       const load = React.useCallback(
         (kind) => {
-          activeController?.abort();
+          activeController.current?.abort();
           const controller = new AbortController();
-          activeController = controller;
+          activeController.current = controller;
+          const requestId = ++requestSerial.current;
           setState({ status: 'loading' });
           const suffix = kind === null ? '' : `?window=${encodeURIComponent(kind)}`;
           fetch(`${DATA_PATH}${suffix}`, {
@@ -525,14 +527,20 @@ window.__ModuleLoader__.load({
               return body;
             })
             .then((data) => {
-              if (activeController === controller) setState({ status: 'ready', data });
+              if (activeController.current === controller && requestSerial.current === requestId) {
+                setState({ status: 'ready', data });
+              }
             })
             .catch((error) => {
-              if (activeController !== controller || error?.name === 'AbortError') return;
+              if (
+                activeController.current !== controller ||
+                requestSerial.current !== requestId ||
+                error?.name === 'AbortError'
+              ) return;
               setState({ status: 'error', message: String(error.message ?? error) });
             });
           return () => {
-            if (activeController === controller) activeController = undefined;
+            if (activeController.current === controller) activeController.current = null;
             controller.abort();
           };
         },

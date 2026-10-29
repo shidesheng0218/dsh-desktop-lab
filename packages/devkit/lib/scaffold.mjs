@@ -66,6 +66,9 @@ function substitute(text, tokens, filename) {
  */
 export function scaffold(options) {
   const template = options.template ?? 'host-client-panel';
+  if (path.basename(template) !== template || template !== 'host-client-panel') {
+    throw new Error(`模板 ${template} 未注册。可用：host-client-panel`);
+  }
   const source = path.join(TEMPLATES_DIR, template);
   if (!fs.existsSync(source)) {
     throw new Error(`模板 ${template} 不存在。可用：${fs.readdirSync(TEMPLATES_DIR).join(', ')}`);
@@ -90,6 +93,12 @@ export function scaffold(options) {
   };
 
   const target = path.resolve(options.dir);
+  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+    throw new Error(`目标目录不能是符号链接: ${target}`);
+  }
+  if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) {
+    throw new Error(`目标路径不是目录: ${target}`);
+  }
   if (fs.existsSync(target) && fs.readdirSync(target).length > 0 && options.force !== true) {
     throw new Error(`目标目录 ${target} 非空。加 --force 覆盖已有文件。`);
   }
@@ -101,11 +110,15 @@ export function scaffold(options) {
       const childFrom = path.join(from, entry.name);
       // 模板内文件名不含占位符，直接沿用。
       const childTo = path.join(to, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`模板包含不支持的符号链接: ${childFrom}`);
       if (entry.isDirectory()) {
         copy(childFrom, childTo);
         continue;
       }
       const content = substitute(fs.readFileSync(childFrom, 'utf8'), tokens, entry.name);
+      if (fs.existsSync(childTo) && fs.lstatSync(childTo).isSymbolicLink()) {
+        throw new Error(`目标路径不能是符号链接: ${childTo}`);
+      }
       fs.writeFileSync(childTo, content);
       written.push(path.relative(target, childTo));
     }

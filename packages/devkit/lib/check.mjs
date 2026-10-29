@@ -123,6 +123,24 @@ function checkSyntax(file, tempDir) {
   }
 }
 
+function resolveManifestPath(root, value, field) {
+  if (typeof value !== 'string' || value.length === 0 || path.isAbsolute(value)) {
+    throw new Error(`${field} 必须是包目录内的相对路径`);
+  }
+  const target = path.resolve(root, value);
+  if (target !== root && !target.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`${field} 路径越界：${value}`);
+  }
+  let current = root;
+  for (const segment of path.relative(root, target).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) {
+      throw new Error(`${field} 不能经过符号链接：${value}`);
+    }
+  }
+  return target;
+}
+
 function collectJs(dir, base, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
@@ -183,9 +201,14 @@ export function checkPackage(dir) {
   // ---- bundle patch ----
   if (summary.hasBundle) {
     const patchRelative = manifest.dsh.bundle.patch;
-    const patchPath = path.join(root, patchRelative);
-    if (!fs.existsSync(patchPath)) {
-      push('error', 'bundle.patch-missing', `dsh.bundle.patch 指向 ${patchRelative}，但文件不存在`);
+    let patchPath;
+    try {
+      patchPath = resolveManifestPath(root, patchRelative, 'dsh.bundle.patch');
+    } catch (error) {
+      push('error', 'bundle.patch-outside', error.message);
+    }
+    if (patchPath === undefined || !fs.existsSync(patchPath)) {
+      if (patchPath !== undefined) push('error', 'bundle.patch-missing', `dsh.bundle.patch 指向 ${patchRelative}，但文件不存在`);
     } else {
       const { findings: patchFindings, rows } = lintPatch(fs.readFileSync(patchPath, 'utf8'));
       findings.push(...patchFindings);
@@ -220,7 +243,13 @@ export function checkPackage(dir) {
     }
     const clientFiles = [exportPath, clientSpec.entry].filter((v) => typeof v === 'string');
     for (const relative of clientFiles) {
-      const clientPath = path.join(root, relative);
+      let clientPath;
+      try {
+        clientPath = resolveManifestPath(root, relative, 'client entry');
+      } catch (error) {
+        push('error', 'client.entry-outside', error.message);
+        continue;
+      }
       if (!fs.existsSync(clientPath)) {
         push('error', 'client.entry-missing', `client 入口 ${relative} 不存在`);
         continue;
@@ -277,19 +306,24 @@ export function checkPackage(dir) {
   }
 
   // ---- 图标与展示元数据 ----
-  if (manifest.icon !== undefined) {
-    // 边界检查必须排在存在性检查之前：越界路径同时也是「不存在的路径」，
-    // 先报缺失会把真正的问题（宿主会拒绝这个包）掩盖成一个小笔误。
-    const outside =
-      /^([/\\]|[a-zA-Z]:)/.test(manifest.icon) || manifest.icon.split(/[/\\]/).includes('..');
-    if (outside) {
-      push('error', 'icon.outside', 'icon 必须是包目录内的相对路径，不能是绝对路径或包含 ..');
-    } else {
-      const iconPath = path.join(root, manifest.icon);
-      if (!fs.existsSync(iconPath)) {
-        push('error', 'icon.missing', `manifest 声明 icon: ${manifest.icon}，但文件不存在`);
+    if (manifest.icon !== undefined) {
+      // 边界检查必须排在存在性检查之前：越界路径同时也是「不存在的路径」，
+      // 先报缺失会把真正的问题（宿主会拒绝这个包）掩盖成一个小笔误。
+      const outside =
+        /^([/\\]|[a-zA-Z]:)/.test(manifest.icon) || manifest.icon.split(/[/\\]/).includes('..');
+      if (outside) {
+        push('error', 'icon.outside', 'icon 必须是包目录内的相对路径，不能是绝对路径或包含 ..');
       } else {
-        const stat = fs.statSync(iconPath);
+        let iconPath;
+        try {
+          iconPath = resolveManifestPath(root, manifest.icon, 'icon');
+        } catch (error) {
+          push('error', 'icon.outside', error.message);
+        }
+        if (iconPath !== undefined && !fs.existsSync(iconPath)) {
+          push('error', 'icon.missing', `manifest 声明 icon: ${manifest.icon}，但文件不存在`);
+        } else if (iconPath !== undefined) {
+          const stat = fs.statSync(iconPath);
         if (stat.size > ICON_MAX_BYTES) {
           push('error', 'icon.too-large', `图标 ${stat.size} 字节，超过 256 KiB 上限`);
         }

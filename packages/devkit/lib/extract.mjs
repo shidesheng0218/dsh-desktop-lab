@@ -29,8 +29,27 @@ function listPackages(source, root) {
   return packages;
 }
 
+function safeChild(root, relative) {
+  const absoluteRoot = path.resolve(root);
+  const target = path.resolve(absoluteRoot, relative);
+  if (target !== absoluteRoot && !target.startsWith(`${absoluteRoot}${path.sep}`)) {
+    throw new Error(`输出路径越界: ${relative}`);
+  }
+  return target;
+}
+
+function assertNoSymlinks(root, relative = '') {
+  let current = path.resolve(root);
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) {
+      throw new Error(`输出路径包含符号链接: ${current}`);
+    }
+  }
+}
+
 function writeFile(target, buffer, force = false) {
-  if (!force && fs.existsSync(target) && fs.readFileSync(target).equals(buffer)) return false;
+  if (!force && fs.existsSync(target) && fs.lstatSync(target).isFile() && fs.readFileSync(target).equals(buffer)) return false;
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, buffer);
   return true;
@@ -38,8 +57,10 @@ function writeFile(target, buffer, force = false) {
 
 function reconcileDocs(dir, wanted) {
   if (!fs.existsSync(dir)) return;
+  assertNoSymlinks(dir);
   const keep = new Set(wanted);
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) throw new Error(`输出路径包含符号链接: ${path.join(dir, entry.name)}`);
     if (entry.isFile() && /^README(\.zh)?\.md$/.test(entry.name) && !keep.has(entry.name)) {
       fs.rmSync(path.join(dir, entry.name));
     }
@@ -49,11 +70,13 @@ function reconcileDocs(dir, wanted) {
 function reconcileSource(dir, wanted) {
   const lib = path.join(dir, 'lib');
   if (!fs.existsSync(lib)) return;
+  assertNoSymlinks(dir);
   const keep = new Set(wanted);
   function walk(current, prefix) {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const relative = `${prefix}${entry.name}`;
       const full = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`输出路径包含符号链接: ${full}`);
       if (entry.isDirectory()) walk(full, `${relative}/`);
       else if (/^lib\/.*\.(js|mjs|cjs|json)$/.test(relative) && !keep.has(relative)) {
         fs.rmSync(full);
@@ -71,7 +94,7 @@ function documentationRoots(out) {
   );
   return packages
     .map((pkg) => path.join(out, pkg))
-    .filter((dir) => fs.existsSync(dir) && fs.statSync(dir).isDirectory());
+    .filter((dir) => fs.existsSync(dir) && fs.lstatSync(dir).isDirectory() && !fs.lstatSync(dir).isSymbolicLink());
 }
 
 /**
@@ -98,7 +121,8 @@ export function extractDocs({ app, out, force = false, filter }) {
       if (wanted.length === 0) continue;
       count += 1;
       for (const relative of wanted) {
-        const target = path.join(out, pkg, relative);
+        const target = safeChild(path.join(out, pkg), relative);
+        assertNoSymlinks(path.join(out, pkg), relative);
         const buffer = source.read(`${root}@deepseek-ai/${pkg}/${relative}`);
         if (buffer === null) continue;
         if (writeFile(target, buffer, force)) files += 1;
@@ -140,7 +164,8 @@ export function extractSource({ app, out, packages, force = false }) {
       );
       reconcileSource(path.join(out, pkg), wanted);
       for (const relative of wanted) {
-        const target = path.join(out, pkg, relative);
+        const target = safeChild(path.join(out, pkg), relative);
+        assertNoSymlinks(path.join(out, pkg), relative);
         const buffer = source.read(`${root}@deepseek-ai/${pkg}/${relative}`);
         if (buffer === null) continue;
         if (writeFile(target, buffer, force)) files += 1;

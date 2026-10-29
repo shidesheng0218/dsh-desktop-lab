@@ -59,6 +59,12 @@ function createReact() {
         },
       ];
     },
+    useRef(value) {
+      const index = cursor;
+      cursor += 1;
+      if (!(index in hooks)) hooks[index] = { current: value };
+      return hooks[index];
+    },
     useCallback(fn, deps) {
       const index = cursor;
       cursor += 1;
@@ -738,6 +744,70 @@ test('首屏省略 window 参数，让 Host 配置决定默认时间窗', async 
     assert.equal(requests[0].url, '/api/usage-insights');
     const segmented = expandTree(tree).find((node) => Array.isArray(node.props?.options));
     assert.equal(segmented.props.value, '30d');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('切换时间窗后旧响应不能覆盖新报告', async () => {
+  RUNTIME = createReact();
+  const { module } = instantiate();
+  const ctx = makeCtx({ locale: createFakeLocale() });
+  module.apply(ctx);
+  const [, panel] = ctx.registrations;
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  const response = (title, window) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      ok: true,
+      window,
+      report: asciiReport({
+        window: { kind: window },
+        topSessions: [{ ...asciiReport().topSessions[0], title }],
+      }),
+    }),
+  });
+  globalThis.fetch = (url, options) => {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    requests.push({ url, options, resolve });
+    return promise;
+  };
+
+  try {
+    RUNTIME.beginRender();
+    let tree = panel.component(propsFor(panel));
+    const initialEffects = RUNTIME.takeEffects();
+    initialEffects.forEach((effect) => effect());
+    assert.equal(requests.length, 1);
+    requests[0].resolve(response('initial report', '7d'));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    RUNTIME.beginRender();
+    tree = panel.component(propsFor(panel));
+    const segmented = expandTree(tree).find((node) => Array.isArray(node.props?.options));
+    segmented.props.onChange('30d');
+    RUNTIME.beginRender();
+    panel.component(propsFor(panel));
+    const effects = RUNTIME.takeEffects();
+    effects.forEach((effect) => effect());
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].options.signal.aborted, true);
+
+    requests[1].resolve(response('newer report', '30d'));
+    await new Promise((resolve) => setImmediate(resolve));
+    requests[0].resolve(response('older report', '7d'));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    RUNTIME.beginRender();
+    tree = panel.component(propsFor(panel));
+    const strings = collectStrings(tree).join(' | ');
+    assert.match(strings, /newer report/);
+    assert.doesNotMatch(strings, /older report/);
   } finally {
     globalThis.fetch = originalFetch;
   }
